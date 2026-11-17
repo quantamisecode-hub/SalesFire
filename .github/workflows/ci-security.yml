@@ -1,0 +1,195 @@
+name: CI/CD Security Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  DATABASE_URL: sqlite+aiosqlite:///:memory:
+  ENVIRONMENT: development
+  DEBUG: "true"
+  SECRET_KEY: test-secret-key-that-is-at-least-32-chars-long
+  JWT_SECRET: test-jwt-secret-that-is-at-least-32-chars-long
+  JWT_REFRESH_SECRET: test-jwt-refresh-secret-that-is-32-chars
+  ENCRYPTION_KEY: test-encryption-key-that-is-32-chars-long
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: testdb
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run linting (ruff)
+        run: |
+          cd backend
+          ruff check app/ tests/
+
+      - name: Run type checking (mypy)
+        run: |
+          cd backend
+          mypy app/
+
+      - name: Run security scanning (bandit)
+        run: |
+          cd backend
+          bandit -r app/ -o bandit-report.txt -f txt || true
+
+      - name: Run dependency audit (pip-audit)
+        run: |
+          cd backend
+          pip install pip-audit
+          pip-audit || true
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          pytest tests/ --cov=app --cov-report=term-missing --cov-fail-under=70
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm install
+
+      - name: Run linting (ESLint)
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Run type checking (TypeScript)
+        run: |
+          cd frontend
+          npm run typecheck
+
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm test
+
+      - name: Run frontend coverage
+        run: |
+          cd frontend
+          npm run test:coverage
+
+      - name: Scan frontend bundle for secrets
+        run: |
+          cd frontend
+          npm run build
+          grep -r "DATABASE_URL\|MYSQL_PASSWORD\|JWT_SECRET\|SECRET_KEY\|API_KEY\|SMTP_PASSWORD\|ENCRYPTION_KEY" dist/ && echo "SECRET FOUND - BUILD FAILED" && exit 1 || echo "No secrets found in frontend bundle"
+
+  security:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run OWASP dependency check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'b2b-lead-intelligence'
+          path: '.'
+          failBuildOnCVSS: 7
+
+      - name: Run secret scanning
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          exclude_paths: .git/
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.txt
+            dependency-check-report.html
+            trufflehog-report.sarif
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [security]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+      - name: Build backend
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pyinstaller
+          pyinstaller --onefile app/main.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            frontend/dist/
+            backend/dist/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging..."
+          # Add deployment steps here

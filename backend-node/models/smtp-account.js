@@ -1,0 +1,125 @@
+// SmtpAccount Model - organization-level SMTP sending accounts (Prompt 6).
+// Passwords are stored encrypted (AES-256-GCM) and NEVER returned via APIs.
+const { DataTypes, Model } = require('sequelize');
+const { sequelize } = require('../db');
+
+class SmtpAccount extends Model {
+  static associate(models) {
+    this.belongsTo(models.Organization, { as: 'organization', foreignKey: 'organizationId' });
+    this.belongsTo(models.User, { as: 'creator', foreignKey: 'createdBy' });
+    this.hasMany(models.Campaign, { as: 'campaigns', foreignKey: 'sendingAccountId' });
+  }
+}
+
+SmtpAccount.init({
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true,
+  },
+  organizationId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'organization_id',
+  },
+  name: {
+    type: DataTypes.STRING(255),
+    allowNull: false,
+  },
+  smtpHost: {
+    type: DataTypes.STRING(255),
+    allowNull: false,
+    field: 'smtp_host',
+  },
+  smtpPort: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 587,
+    field: 'smtp_port',
+  },
+  // none | tls (STARTTLS) | ssl (implicit TLS)
+  security: {
+    type: DataTypes.STRING(20),
+    allowNull: false,
+    defaultValue: 'tls',
+  },
+  smtpUsername: {
+    type: DataTypes.STRING(255),
+    field: 'smtp_username',
+  },
+  smtpPasswordEncrypted: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    field: 'smtp_password_encrypted',
+  },
+  fromEmail: {
+    type: DataTypes.STRING(255),
+    allowNull: false,
+    field: 'from_email',
+  },
+  fromName: {
+    type: DataTypes.STRING(255),
+    field: 'from_name',
+  },
+  replyToEmail: {
+    type: DataTypes.STRING(255),
+    field: 'reply_to_email',
+  },
+  dailyLimit: {
+    type: DataTypes.INTEGER,
+    field: 'daily_limit',
+  },
+  // Signature resolution (Prompt 9): INHERIT | CUSTOM | NONE.
+  signatureMode: {
+    type: DataTypes.STRING(10),
+    field: 'signature_mode',
+    defaultValue: 'inherit',
+  },
+  signatureId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    field: 'signature_id',
+  },
+  hourlyLimit: {
+    type: DataTypes.INTEGER,
+    field: 'hourly_limit',
+  },
+  minDelayMinutes: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    field: 'min_delay_minutes',
+  },
+  maxDelayMinutes: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    field: 'max_delay_minutes',
+  },
+  isEnabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    field: 'is_enabled',
+  },
+  status: {
+    type: DataTypes.STRING(50),
+    defaultValue: 'unverified',
+  },
+  lastTestedAt: {
+    type: DataTypes.DATE,
+    field: 'last_tested_at',
+  },
+  lastTestResult: {
+    type: DataTypes.STRING(255),
+    field: 'last_test_result',
+  },
+  createdBy: {
+    type: DataTypes.UUID,
+    field: 'created_by',
+  },
+}, {
+  sequelize,
+  tableName: 'smtp_accounts',
+  timestamps: true,
+  underscored: true,
+});
+
+module.exports = SmtpAccount;
