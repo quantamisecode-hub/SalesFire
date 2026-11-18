@@ -564,7 +564,7 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Email sequence</h2>
             <p className="text-xs text-slate-500">
-              Variables insert real lead data; spintax picks one option per recipient; follow-ups can leave the subject empty to continue the thread.
+              Variables insert real lead data; spintax picks one option per lead; follow-ups can leave the subject empty to continue the thread.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -603,8 +603,8 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
             <p className="text-[11px] text-slate-400 px-1 pt-1 flex items-start gap-1">
               <Users size={11} className="mt-0.5 shrink-0" />
               {recipients.length
-                ? `Preview renders with your ${recipients.length} enrolled recipient${recipients.length > 1 ? "s" : ""}.`
-                : "No recipients yet — the preview uses labeled sample data."}
+                ? `Preview renders with your ${recipients.length} enrolled lead${recipients.length > 1 ? "s" : ""}.`
+                : "No leads yet — the preview uses labeled sample data."}
             </p>
           </div>
 
@@ -758,8 +758,8 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
               />
             )}
 
-            <div className="flex items-center justify-between flex-wrap gap-2 min-w-0">
-              <div className="flex flex-wrap items-center gap-2 min-w-0 w-full">
+            <div className="flex flex-wrap items-center justify-between gap-2 min-w-0 border-t border-slate-100 pt-2.5">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <button type="button" onClick={() => setShowTestModal(true)}
                   disabled={!campaignId || !((currentVariant ? currentVariant.bodyHtml : current.bodyTemplate) || (currentVariant ? currentVariant.bodyText : current.bodyTemplate))}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap">
@@ -769,7 +769,7 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
                   getSubject={() => (currentVariant ? currentVariant.subject : current.subjectTemplate)}
                   getBodyHtml={() => (currentVariant ? currentVariant.bodyHtml : current.bodyTemplate)} />
               </div>
-              <span className="text-[11px] text-slate-400 whitespace-nowrap">{totalWords} words · autosaves 1.5s after you stop typing · ⌘S to save now</span>
+              <span className="text-[10px] text-slate-400 whitespace-nowrap tabular-nums">{totalWords} words · autosaves 1.5s after typing · ⌘S to save</span>
             </div>
           </div>
 

@@ -33,3 +33,27 @@
 .animate-route-progress {
   animation: route-progress 400ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
+
+/* TipTap email editor (sequence builder) */
+.tiptap-email {
+  min-height: 220px;
+}
+.tiptap-email p {
+  margin: 0 0 0.75rem 0;
+}
+.tiptap-email p:last-child {
+  margin-bottom: 0;
+}
+.tiptap-email a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.tiptap-email img {
+  max-width: 100%;
+}
+.tiptap-email ul,
+.tiptap-email ol {
+  margin: 0 0 0.75rem 1.25rem;
+}
+.tiptap-email ul { list-style: disc; }
+.tiptap-email ol { list-style: decimal; }

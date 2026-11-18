@@ -4,7 +4,21 @@
 const { DataTypes, Model } = require('sequelize');
 const { sequelize } = require('../db');
 
-const LEAD_STATUSES = ['new', 'approved', 'contacted', 'replied', 'bounced', 'unsubscribed', 'suppressed', 'invalid'];
+// Progression statuses flow from the sending engine; interest statuses are
+// manual CRM-style signals (Instantly parity). We deliberately do NOT add
+// open/click engagement statuses — open/click events are not tracked.
+const LEAD_STATUSES = [
+  'new', 'approved', 'contacted', 'replied', 'bounced', 'unsubscribed', 'suppressed', 'invalid',
+  'completed',
+  'interested', 'meeting_completed', 'meeting_completed_not_closed',
+  'won', 'lost', 'not_interested', 'out_of_office', 'wrong_person',
+];
+// Statuses reset to 'new' when leads are moved between campaigns (Instantly's
+// "reset interest status"). Progression statuses (contacted/replied/…) are kept.
+const INTEREST_STATUSES = [
+  'interested', 'meeting_completed', 'meeting_completed_not_closed',
+  'won', 'lost', 'not_interested', 'out_of_office', 'wrong_person',
+];
 const EMAIL_STATUSES = ['unknown', 'discovered', 'syntax_valid', 'domain_valid', 'mx_valid', 'verified', 'invalid', 'bounced', 'unsubscribed'];
 
 class Lead extends Model {
@@ -66,6 +80,12 @@ Lead.init({
     field: 'lead_score',
     validate: { min: 0, max: 100 },
   },
+  // Owner assignment (Instantly lead-owner parity). FK to users.id, nullable.
+  assignedTo: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    field: 'assigned_to',
+  },
   source: {
     type: DataTypes.STRING(50),
     defaultValue: 'manual', // manual | import | lead_finder
@@ -82,10 +102,12 @@ Lead.init({
     { fields: ['organization_id', 'status'] },
     { fields: ['organization_id', 'email_status'] },
     { fields: ['organization_id', 'lead_score'] },
+    { fields: ['organization_id', 'assigned_to'] },
     { fields: ['organization_id', 'created_at'] },
   ],
 });
 
 module.exports = Lead;
 module.exports.LEAD_STATUSES = LEAD_STATUSES;
+module.exports.INTEREST_STATUSES = INTEREST_STATUSES;
 module.exports.EMAIL_STATUSES = EMAIL_STATUSES;

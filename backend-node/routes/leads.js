@@ -8,6 +8,8 @@ const { Op } = require('sequelize');
 const models = require('../models');
 const { verifyAccessToken } = require('../security');
 const leadImport = require('../services/lead-import');
+const leadFilter = require('../services/lead-filter');
+const { sequelize } = require('../db');
 const { Suppression, CampaignLead, EmailEvent } = models;
 
 const router = express.Router();
@@ -97,6 +99,7 @@ function serialize(l) {
     customFields: l.customFields || null,
     status: l.status,
     emailStatus: l.emailStatus,
+    assignedTo: l.assignedTo || null,
     leadScore: l.leadScore,
     source: l.source,
     createdAt: l.createdAt,
@@ -124,6 +127,15 @@ router.get('/', async (req, res) => {
     const { status, emailStatus, industry, companySize, location } = req.query;
     if (status && status !== 'all') where.status = status;
     if (emailStatus && emailStatus !== 'all') where.emailStatus = emailStatus;
+    // Owner filter: 'unassigned' | 'all' | <userId>
+    const owner = (req.query.owner || '').toString();
+    if (owner === 'unassigned') where.assignedTo = null;
+    else if (owner && owner !== 'all') where.assignedTo = owner;
+    // Instantly "Data fields" filter (builtin or custom variable).
+    if (leadFilter.hasFieldFilter(req.query)) {
+      const ids = await leadFilter.matchingLeadIds(req.user.org, req.query);
+      if (ids) where.id = { [Op.in]: ids };
+    }
     if (industry) where.industry = { [Op.like]: `%${industry}%` };
     if (companySize) where.companySize = companySize;
     if (location) where.location = { [Op.like]: `%${location}%` };
@@ -138,7 +150,7 @@ router.get('/', async (req, res) => {
       if (req.query.createdBefore) where.createdAt[Op.lte] = new Date(req.query.createdBefore);
     }
 
-    const sortable = ['firstName', 'lastName', 'companyName', 'jobTitle', 'email', 'status', 'emailStatus', 'leadScore', 'createdAt', 'updatedAt'];
+    const sortable = ['firstName', 'lastName', 'companyName', 'jobTitle', 'email', 'status', 'emailStatus', 'leadScore', 'createdAt', 'updatedAt', 'assignedTo'];
     const sortBy = sortable.includes(req.query.sortBy) ? req.query.sortBy : 'createdAt';
     const sortDir = req.query.sortDir === 'asc' ? 'ASC' : 'DESC';
 
@@ -379,9 +391,19 @@ router.patch('/:id', async (req, res) => {
     if (!canWrite(req)) return res.status(403).json({ error: 'You do not have permission to edit leads' });
     const lead = await models.Lead.findOne({ where: { id: req.params.id, organizationId: req.user.org } });
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    const allowed = ['firstName', 'lastName', 'companyName', 'jobTitle', 'phone', 'website', 'linkedin', 'location', 'industry', 'companySize', 'personalization', 'status'];
+    const allowed = ['firstName', 'lastName', 'companyName', 'jobTitle', 'phone', 'website', 'linkedin', 'location', 'industry', 'companySize', 'personalization', 'status', 'assignedTo'];
+    const { LEAD_STATUSES } = require('../models/lead');
     for (const key of allowed) {
-      if (req.body?.[key] !== undefined) lead[key] = key === 'status' ? String(req.body[key]).toLowerCase() : String(req.body[key]).slice(0, 255);
+      if (req.body?.[key] === undefined) continue;
+      if (key === 'status') {
+        const s = String(req.body[key]).toLowerCase();
+        if (!LEAD_STATUSES.includes(s)) return res.status(422).json({ error: `Invalid lead status '${s}'` });
+        lead[key] = s;
+      } else if (key === 'assignedTo') {
+        lead[key] = req.body[key] === null || req.body[key] === '' ? null : String(req.body[key]);
+      } else {
+        lead[key] = String(req.body[key]).slice(0, 255);
+      }
     }
     if (req.body?.leadScore !== undefined) {
       const n = parseInt(req.body.leadScore, 10);
@@ -442,6 +464,63 @@ router.post('/bulk/add-to-campaign', async (req, res) => {
   } catch (error) {
     console.error('Bulk add-to-campaign error:', error);
     res.status(500).json({ error: 'Failed to add leads to campaign' });
+  }
+});
+
+// POST /bulk/assign — round-robin assign selected leads to org members (Instantly lead-owner parity)
+router.post('/bulk/assign', async (req, res) => {
+  try {
+    if (!canWrite(req)) return res.status(403).json({ error: 'You do not have permission' });
+    const { leadIds, campaignId, memberIds, strategy = 'round_robin' } = req.body || {};
+    if (strategy !== 'round_robin') return res.status(422).json({ error: "Only strategy 'round_robin' is supported" });
+    if (!Array.isArray(memberIds) || !memberIds.length) return res.status(422).json({ error: 'memberIds is required' });
+
+    // Resolve members → must be active members of this org.
+    const { OrganizationMembership } = models;
+    const memberships = await OrganizationMembership.findAll({
+      where: { organizationId: req.user.org, isActive: true, userId: { [Op.in]: memberIds } },
+    });
+    const validIds = memberships.map((m) => m.userId);
+    if (!validIds.length) return res.status(422).json({ error: 'None of the selected members belong to this organization' });
+
+    // Resolve target leads: explicit ids, or all leads enrolled in a campaign.
+    let leads;
+    if (campaignId) {
+      const campaign = await models.Campaign.findOne({ where: { id: campaignId, organizationId: req.user.org } });
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+      const recipients = await CampaignLead.findAll({ where: { campaignId: campaign.id, organizationId: req.user.org }, attributes: ['leadId', 'email'] });
+      const ids = recipients.map((r) => r.leadId).filter(Boolean);
+      const emails = recipients.map((r) => String(r.email || '').trim().toLowerCase()).filter(Boolean);
+      if (!ids.length && !emails.length) return res.json({ success: true, data: { assigned: 0, perMember: {} } });
+      leads = await models.Lead.findAll({
+        where: {
+          organizationId: req.user.org,
+          [Op.or]: [
+            ...(ids.length ? [{ id: { [Op.in]: ids } }] : []),
+            ...(emails.length ? [sequelize.where(sequelize.fn('LOWER', sequelize.col('email')), { [Op.in]: emails })] : []),
+          ],
+        },
+      });
+    } else if (Array.isArray(leadIds) && leadIds.length) {
+      leads = await models.Lead.findAll({ where: { id: { [Op.in]: leadIds }, organizationId: req.user.org } });
+    } else {
+      return res.status(422).json({ error: 'leadIds or campaignId is required' });
+    }
+
+    // Deterministic order → stable round-robin distribution.
+    leads.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    const perMember = new Map(validIds.map((id) => [id, 0]));
+    await sequelize.transaction(async (t) => {
+      for (let i = 0; i < leads.length; i++) {
+        const memberId = validIds[i % validIds.length];
+        await leads[i].update({ assignedTo: memberId }, { transaction: t });
+        perMember.set(memberId, (perMember.get(memberId) || 0) + 1);
+      }
+    });
+    res.json({ success: true, data: { assigned: leads.length, perMember: Object.fromEntries(perMember) } });
+  } catch (error) {
+    console.error('Bulk assign error:', error);
+    res.status(500).json({ error: 'Failed to assign leads' });
   }
 });
 

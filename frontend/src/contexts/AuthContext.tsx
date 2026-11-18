@@ -39,8 +39,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const currentUser = await authService.getMe();
       setUser(currentUser);
-    } catch {
-      setUser(null);
+    } catch (err: any) {
+      // Only 401/403 proves the session is gone. Transient failures (429 rate
+      // limit, network) must NOT log an authenticated user out — keep state.
+      const status = err?.status;
+      if (status === 401 || status === 403) {
+        setUser(null);
+      }
     } finally {
       setLoading(false);
     }

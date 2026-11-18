@@ -172,6 +172,11 @@ connectDB().then(() => {
   app.use('/api/v1/signatures', require('./routes/signatures'));
   app.use('/api/v1/unsubscribe', require('./routes/unsubscribe'));
   app.use('/api/v1/leads', require('./routes/leads'));
+  app.use('/api/v1/lists', require('./routes/lists'));
+  app.use('/api/v1/conversations', require('./routes/conversations').conversationsRouter);
+  app.use('/api/v1/email-sync', require('./routes/conversations').syncRouter);
+  app.use('/api/v1/notifications', require('./routes/notifications'));
+  app.use('/api/v1/members', require('./routes/members'));
   app.use('/api/v1/ai', require('./routes/ai'));
   app.use('/api/v1/deliverability', require('./routes/deliverability'));
 
@@ -182,6 +187,9 @@ connectDB().then(() => {
   const engine = require('./services/campaign-engine');
   engine.startWorker(20000);
   console.log(`📬 Campaign worker started (${engine.WORKER_ID})`);
+
+  const inboxSync = require('./services/inbound-email-worker');
+  inboxSync.startInboundSyncWorker();
 
   // ============================================================================
   // Warm-up Worker (Prompt 8) - graduated real sends from cold accounts.

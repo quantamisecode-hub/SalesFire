@@ -11,6 +11,8 @@ const templateRenderer = require('../services/template-renderer');
 const emailService = require('../services/email');
 const engine = require('../services/campaign-engine');
 const realtime = require('../services/realtime'); // no-op when sockets aren't initialized (tests)
+const leadFilter = require('../services/lead-filter');
+const leadMove = require('../services/lead-move');
 
 // Middleware: authenticate JWT from cookie
 function authenticate(req, res, next) {
@@ -1545,16 +1547,40 @@ router.get('/:id/recipients', authenticate, checkOrgMembership, async (req, res)
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 25));
     const { status, search } = req.query;
 
-    const where = { campaignId: campaign.id };
-    if (status && status !== 'all') where.status = status;
+    const and = [];
+    if (status && status !== 'all') and.push({ status });
     if (search) {
-      where[Op.or] = [
-        { email: { [Op.like]: `%${search}%` } },
-        { firstName: { [Op.like]: `%${search}%` } },
-        { lastName: { [Op.like]: `%${search}%` } },
-        { companyName: { [Op.like]: `%${search}%` } },
-      ];
+      and.push({
+        [Op.or]: [
+          { email: { [Op.like]: `%${search}%` } },
+          { firstName: { [Op.like]: `%${search}%` } },
+          { lastName: { [Op.like]: `%${search}%` } },
+          { companyName: { [Op.like]: `%${search}%` } },
+        ],
+      });
     }
+    // Instantly "Data fields" + owner filters (via the linked lead record).
+    const leadConstraint = (m) => ({
+      [Op.or]: [
+        { leadId: { [Op.in]: m.ids } },
+        { [Op.and]: [sequelize.where(sequelize.fn('LOWER', sequelize.col('email')), { [Op.in]: m.emails })] },
+      ],
+    });
+    if (leadFilter.hasFieldFilter(req.query)) {
+      const m = await leadFilter.matchingLeads(campaign.organizationId, req.query);
+      if (m) and.push(leadConstraint(m));
+    }
+    const owner = (req.query.owner || '').toString();
+    if (owner === 'unassigned' || (owner && owner !== 'all')) {
+      const ownerWhere = { organizationId: campaign.organizationId };
+      if (owner === 'unassigned') ownerWhere.assignedTo = null;
+      else ownerWhere.assignedTo = owner;
+      const leads = await models.Lead.findAll({ where: ownerWhere, attributes: ['id', 'email'] });
+      and.push(leadConstraint({ ids: leads.map((l) => l.id), emails: leads.map((l) => String(l.email || '').toLowerCase()) }));
+    }
+
+    const where = { campaignId: campaign.id };
+    if (and.length) where[Op.and] = and;
 
     const { count, rows } = await models.CampaignLead.findAndCountAll({
       where,
@@ -1572,6 +1598,64 @@ router.get('/:id/recipients', authenticate, checkOrgMembership, async (req, res)
   } catch (error) {
     console.error('List recipients error:', error);
     res.status(500).json({ error: 'Failed to list recipients' });
+  }
+});
+
+// ============================================================================
+// Instantly-style lead operations (§ multi-select bulk actions).
+// POST /:id/recipients/move — move/copy selected recipients to another campaign
+// ============================================================================
+router.post('/:id/recipients/move', authenticate, checkOrgMembership, async (req, res) => {
+  try {
+    const campaign = await loadCampaign(req, res);
+    if (!campaign) return;
+    const { recipientIds, leadIds, targetCampaignId, copy = false, resetStatus = true, checkDuplicates = true } = req.body || {};
+    const ids = Array.isArray(recipientIds) && recipientIds.length ? recipientIds : (Array.isArray(leadIds) && leadIds.length ? undefined : null);
+    if (ids === null && !(Array.isArray(leadIds) && leadIds.length)) {
+      return res.status(422).json({ error: 'recipientIds or leadIds is required' });
+    }
+    if (!targetCampaignId) return res.status(422).json({ error: 'targetCampaignId is required' });
+    const result = await leadMove.moveRecipientsToCampaign({
+      orgId: req.user.org,
+      sourceCampaignId: campaign.id,
+      targetCampaignId,
+      recipientIds: ids,
+      leadIds: Array.isArray(leadIds) ? leadIds : undefined,
+      copy: Boolean(copy),
+      resetStatus: Boolean(resetStatus),
+      checkDuplicates: Boolean(checkDuplicates),
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Move recipients error:', error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Failed to move recipients' });
+  }
+});
+
+// POST /:id/recipients/move-to-list — move/copy selected recipients into a CRM list
+router.post('/:id/recipients/move-to-list', authenticate, checkOrgMembership, async (req, res) => {
+  try {
+    const campaign = await loadCampaign(req, res);
+    if (!campaign) return;
+    const { recipientIds, leadIds, targetListId, copy = false } = req.body || {};
+    const ids = Array.isArray(recipientIds) && recipientIds.length ? recipientIds : undefined;
+    if (!ids && !(Array.isArray(leadIds) && leadIds.length)) {
+      return res.status(422).json({ error: 'recipientIds or leadIds is required' });
+    }
+    if (!targetListId) return res.status(422).json({ error: 'targetListId is required' });
+    const result = await leadMove.moveRecipientsToList({
+      orgId: req.user.org,
+      actorId: req.user.id,
+      sourceCampaignId: campaign.id,
+      listId: targetListId,
+      recipientIds: ids,
+      leadIds: Array.isArray(leadIds) ? leadIds : undefined,
+      copy: Boolean(copy),
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('Move recipients to list error:', error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Failed to move recipients to list' });
   }
 });
 

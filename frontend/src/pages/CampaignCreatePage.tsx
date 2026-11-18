@@ -251,16 +251,16 @@ export function CampaignCreatePage() {
       // the Audience table (bulk actions / import with campaignId).
       const fresh = await refreshAudience(campaignId);
       if (!fresh) {
-        setStepError("Couldn't verify the recipients — the server couldn't be reached (your session may have expired). Refresh the page and try again.");
+        setStepError("Couldn't verify the leads — the server couldn't be reached (your session may have expired). Refresh the page and try again.");
         return false;
       }
       if (!fresh.counts.total) {
-        setStepError("Add at least one recipient — import a list or add leads to the campaign.");
+        setStepError("Add at least one lead — import a list or add leads to the campaign.");
         return false;
       }
       return true;
     } catch (err: any) {
-      setStepError(err?.data?.error || "Failed to save recipients.");
+      setStepError(err?.data?.error || "Failed to save leads.");
       return false;
     } finally {
       setIsSaving(false);
@@ -372,7 +372,7 @@ export function CampaignCreatePage() {
     try {
       const res = await campaignService.launch(campaignId);
       setLaunchResult({ queued: res.queuedJobs ?? 0, suppressed: res.suppressedRecipients ?? 0 });
-      toast.success(`Campaign launched — ${res.queuedJobs ?? 0} email(s) queued, ${res.suppressedRecipients ?? 0} recipient(s) suppressed.`);
+      toast.success(`Campaign launched — ${res.queuedJobs ?? 0} email(s) queued, ${res.suppressedRecipients ?? 0} lead(s) suppressed.`);
       setTimeout(() => navigate(`/campaigns/${campaignId}`), 1200);
     } catch (err: any) {
       const problems = err?.data?.problems;
@@ -415,7 +415,7 @@ export function CampaignCreatePage() {
   const wideStep = step === 3;
 
   return (
-    <div className={`p-6 mx-auto ${wideStep ? "max-w-[1500px]" : "max-w-4xl"}`}>
+    <div className={`mx-auto ${wideStep ? "max-w-[1500px]" : "max-w-4xl"}`}>
       {/* Stepper */}
       <ol className="flex items-center flex-wrap gap-y-2 mb-8" aria-label="Campaign wizard steps">
         {STEPS.map((label, i) => {
@@ -456,7 +456,7 @@ export function CampaignCreatePage() {
       )}
       {launchResult && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm px-4 py-3" role="status">
-          Campaign launched — {launchResult.queued} email(s) queued, {launchResult.suppressed} recipient(s) suppressed. Opening the campaign…
+          Campaign launched — {launchResult.queued} email(s) queued, {launchResult.suppressed} lead(s) suppressed. Opening the campaign…
         </div>
       )}
 
@@ -718,9 +718,9 @@ export function CampaignCreatePage() {
                   ))
                 )}
                 <ComplianceItem ok label="Account identities resolve per email — from address, reply-to and signature come from the account actually sending" />
-                <ComplianceItem ok={(counts?.eligible ?? 0) > 0} label="At least one eligible recipient" />
+                <ComplianceItem ok={(counts?.eligible ?? 0) > 0} label="At least one eligible lead" />
                 <ComplianceItem ok={(counts?.suppressed ?? 0) === 0 || true}
-                  label={`${counts?.suppressed ?? 0} suppressed recipient(s) will be skipped`} neutral />
+                  label={`${counts?.suppressed ?? 0} suppressed lead(s) will be skipped`} neutral />
                 <ComplianceItem ok label="Unsubscribe link is appended to every campaign email; unsubscribes become org-wide suppression" />
               </ul>
               <p className="text-xs text-slate-400 mt-3">

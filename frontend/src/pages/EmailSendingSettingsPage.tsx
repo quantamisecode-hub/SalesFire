@@ -9,6 +9,7 @@ import {
   ChevronLeft, ChevronRight, Gauge, CalendarClock,
 } from "lucide-react";
 import { emailSendingService, type SendingOverview, type AccountUsage } from "@/services/emailSending";
+import { inboxService, type SyncAccountStatus } from "@/services/inbox";
 import { WarmupPanel } from "@/components/WarmupPanel";
 import { signatureService, type EmailSignature } from "@/services/signature";
 import { Badge } from "@/components/Badge";
@@ -112,6 +113,9 @@ export function EmailSendingSettingsPage() {
   const [usage, setUsage] = useState<AccountUsage | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
 
+  const [syncStatus, setSyncStatus] = useState<Record<string, SyncAccountStatus>>({});
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+
   const [testModalId, setTestModalId] = useState<string | null>(null);
   const [testAddress, setTestAddress] = useState("");
   const [testSubject, setTestSubject] = useState("SalesFire test email");
@@ -128,12 +132,14 @@ export function EmailSendingSettingsPage() {
     try {
       setIsLoading(true);
       setLoadError(null);
-      const [listRes, overviewRes] = await Promise.all([
+      const [listRes, overviewRes, syncRes] = await Promise.all([
         emailSendingService.listAccounts(),
         emailSendingService.getOverview().catch(() => null),
+        inboxService.syncStatus().catch(() => null),
       ]);
       setAccounts(listRes.data || []);
       setOverview(overviewRes?.data ?? null);
+      setSyncStatus(Object.fromEntries((syncRes?.data || []).map((s) => [s.accountId, s])));
     } catch {
       setLoadError("Failed to load sending accounts.");
     } finally {
@@ -404,6 +410,54 @@ export function EmailSendingSettingsPage() {
     } finally {
       setBusyActionId(null);
     }
+  };
+
+  // Manual IMAP sync — real connection, errors surface honestly
+  const syncNow = async (a: SmtpAccount) => {
+    setSyncingId(a.id);
+    try {
+      const res = await inboxService.triggerSync(a.id);
+      const ok = res?.data?.ok !== false && !res?.data?.error;
+      toast.success(ok ? `Synced ${res?.data?.processed ?? 0} new message(s) from ${a.fromEmail}.` : `Sync failed: ${res?.data?.error || "unknown error"}`);
+      await load();
+    } catch (err: any) {
+      toast.error(err?.data?.error || "Sync failed.");
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const syncCell = (a: SmtpAccount) => {
+    const s = syncStatus[a.id];
+    if (!s?.imapConfigured) {
+      return (
+        <div className="space-y-1">
+          <span className="inline-flex items-center gap-1.5 text-xs text-amber-700"><CircleDot size={10} /> Not configured</span>
+          <p className="text-[10px] text-slate-400 max-w-[140px]">IMAP credentials required</p>
+        </div>
+      );
+    }
+    const tone = s.status === "auth_failed"
+      ? "text-red-600"
+      : s.status === "error" ? "text-red-600"
+      : "text-emerald-600";
+    const label = s.status === "syncing" ? "Syncing…"
+      : s.status === "auth_failed" ? "Auth failed"
+      : s.status === "error" ? "Error"
+      : "Connected";
+    const last = s.lastSuccessfulSyncAt ? new Date(s.lastSuccessfulSyncAt).toLocaleString() : "never";
+    return (
+      <div className="space-y-1">
+        <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${tone}`}>
+          <CircleDot size={10} />{label}
+        </span>
+        <p className="text-[10px] text-slate-400">Last sync: {last}</p>
+        <button type="button" onClick={() => syncNow(a)} disabled={syncingId === a.id}
+          className="text-[10px] font-medium text-primary hover:underline disabled:opacity-50">
+          {syncingId === a.id ? "Syncing…" : "Sync now"}
+        </button>
+      </div>
+    );
   };
 
   const signatureValueOf = (a: SmtpAccount) =>
@@ -769,6 +823,7 @@ export function EmailSendingSettingsPage() {
                   <th className="px-4 py-3">Hourly</th>
                   <th className="px-4 py-3">This hour</th>
                   <th className="px-4 py-3">Warmup</th>
+                  <th className="px-4 py-3">Inbound sync</th>
                   <th className="px-4 py-3">Active campaigns</th>
                   <th className="px-4 py-3">Last sent</th>
                   <th className="px-4 py-3 text-right">Actions</th>
@@ -818,6 +873,7 @@ export function EmailSendingSettingsPage() {
                       </td>
                       <td className="px-4 py-3 tabular-nums text-slate-700">{a.sentThisHour ?? 0}</td>
                       <td className="px-4 py-3"><Badge status={a.warmupStatus || "not_started"} /></td>
+                      <td className="px-4 py-3">{syncCell(a)}</td>
                       <td className="px-4 py-3 tabular-nums text-slate-700">{a.activeCampaigns ?? 0}</td>
                       <td className="px-4 py-3 text-xs text-slate-500">{a.lastSentAt ? timeAgo(a.lastSentAt) : "Never"}</td>
                       <td className="px-4 py-3">

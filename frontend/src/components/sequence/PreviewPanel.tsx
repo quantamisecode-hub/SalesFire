@@ -161,8 +161,8 @@ export function PreviewPanel({ campaignId, stepId, variantId, recipients, sendin
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap">
         <select value={recipientId} onChange={(e) => setRecipientId(e.target.value)}
-          className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white min-w-0 max-w-full" aria-label="Preview as recipient">
-          <option value="">First campaign recipient{recipients.length === 0 ? " (sample data)" : ""}</option>
+          className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white min-w-0 max-w-full" aria-label="Preview as lead">
+          <option value="">First campaign lead{recipients.length === 0 ? " (sample data)" : ""}</option>
           {recipients.slice(0, 100).map((r) => (
             <option key={r.id} value={r.id}>
               {[r.firstName, r.lastName].filter(Boolean).join(" ") || r.email}
@@ -186,7 +186,7 @@ export function PreviewPanel({ campaignId, stepId, variantId, recipients, sendin
           ) : (
             <button type="button" onClick={() => setSeed(Math.random().toString(36).slice(2))} disabled={busy}
               className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50"
-              title="Re-roll the spintax — the same recipient renders with different wording">
+              title="Re-roll the spintax — the same lead renders with different wording">
               {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Another variation
             </button>
           )}
@@ -198,7 +198,7 @@ export function PreviewPanel({ campaignId, stepId, variantId, recipients, sendin
                 <button type="button" onClick={() => setSpintaxHelpOpen(false)} aria-label="Close" className="p-0.5 rounded text-slate-400 hover:bg-slate-100"><X size={12} /></button>
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
-                <strong>Another variation</strong> re-rolls the spintax pick so the email reads differently for each recipient.
+                <strong>Another variation</strong> re-rolls the spintax pick so the email reads differently for each lead.
                 It only has an effect when this email actually contains <span className="font-mono text-violet-700">{"{{RANDOM | Hi | Hello}}"}</span> — that&apos;s why it does nothing (and is inert) right now.
               </p>
               <div className="mt-2 text-[11px] leading-relaxed text-slate-600">
@@ -206,7 +206,7 @@ export function PreviewPanel({ campaignId, stepId, variantId, recipients, sendin
                 <ol className="list-decimal pl-4 space-y-0.5">
                   <li>In the toolbar, click the <span className="font-medium">Spintax builder</span> icon (shuffle arrows).</li>
                   <li>Type one option per line — e.g. <span className="font-mono text-violet-700">Hi</span>, <span className="font-mono text-violet-700">Hello</span>, <span className="font-mono text-violet-700">Hey</span>.</li>
-                  <li>Insert — the variable appears in your email and re-rolls per recipient.</li>
+                  <li>Insert — the variable appears in your email and re-rolls per lead.</li>
                 </ol>
               </div>
               <p className="mt-2 text-[11px] text-slate-400">A/B variants are previewed by clicking the variant tabs (e.g. “Variant A · 100%”) — this button cycles the spintax options only.</p>
@@ -239,13 +239,13 @@ export function PreviewPanel({ campaignId, stepId, variantId, recipients, sendin
           </div>
           {preview.isSampleRecipient && (
             <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-b border-amber-100 flex items-center gap-1">
-              <AlertTriangle size={11} /> This campaign has no recipients yet — the preview uses clearly-labeled sample data.
+              <AlertTriangle size={11} /> This campaign has no leads yet — the preview uses clearly-labeled sample data.
             </p>
           )}
           {(preview.unresolved.length > 0 || preview.malformed.length > 0) && (
             <div className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-b border-amber-100 space-y-0.5">
               {preview.unresolved.length > 0 && (
-                <p><strong>Unresolved variables:</strong> {preview.unresolved.map((v) => `{{${v}}}`).join(", ")} — this recipient has no data for them.</p>
+                <p><strong>Unresolved variables:</strong> {preview.unresolved.map((v) => `{{${v}}}`).join(", ")} — this lead has no data for them.</p>
               )}
               {preview.malformed.map((m, i) => (
                 <p key={i}><strong>{m.reason}</strong> <code className="text-[10px]">{m.snippet}</code></p>

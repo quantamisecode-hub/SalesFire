@@ -545,7 +545,7 @@ export function CampaignDetailPage() {
               <>
                 <p className="text-xs text-slate-500 mt-1">
                   {preview.data.isSampleRecipient
-                    ? "Using sample data (the campaign has no recipients yet)."
+                    ? "Using sample data (the campaign has no leads yet)."
                     : `Rendered for ${preview.data.to?.name || preview.data.to?.email} with real variable substitution.`}
                 </p>
                 {(preview.data.unresolved?.length ?? 0) > 0 && (

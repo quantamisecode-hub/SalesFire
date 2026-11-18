@@ -2,7 +2,7 @@
 // Server-side pagination, search, sort and filtering; real metrics and
 // status-aware row actions (View / Edit / Pause / Resume / Duplicate / Archive).
 import { useState, useEffect, useCallback } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Plus, Search, ExternalLink, Pencil, Pause, Play, Copy, Archive,
   Loader2, ChevronLeft, ChevronRight, Megaphone, Trash2,
@@ -23,8 +23,9 @@ export function CampaignListPage() {
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const [searchParams] = useSearchParams();
+  const [searchInput, setSearchInput] = useState(() => searchParams.get("q") || "");
+  const [search, setSearch] = useState(() => searchParams.get("q") || "");
   const [status, setStatus] = useState("all");
   const [sortBy, setSortBy] = useState("createdAt");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -61,6 +62,14 @@ export function CampaignListPage() {
   }, [status, search, sortBy, sortDir, page]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Keep the list in sync with ?q= when the header search navigates here.
+  useEffect(() => {
+    const q = searchParams.get("q") || "";
+    setSearchInput(q);
+    setSearch(q);
+    setPage(1);
+  }, [searchParams]);
 
   // Live sync: refetch the list whenever any campaign in this org changes
   // (launch/pause/resume/edit from another session).

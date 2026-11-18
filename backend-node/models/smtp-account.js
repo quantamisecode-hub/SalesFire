@@ -154,6 +154,13 @@ SmtpAccount.init({
     type: DataTypes.UUID,
     field: 'created_by',
   },
+  // IMAP (inbound) — optional; an account is "sync-configured" only when host+user+password are set.
+  imapHost: { type: DataTypes.STRING(255), field: 'imap_host' },
+  imapPort: { type: DataTypes.INTEGER, field: 'imap_port', defaultValue: 993 },
+  imapSecure: { type: DataTypes.BOOLEAN, field: 'imap_secure', defaultValue: true },
+  imapUsername: { type: DataTypes.STRING(255), field: 'imap_username' },
+  imapPasswordEncrypted: { type: DataTypes.TEXT, field: 'imap_password_encrypted' },
+  imapEnabled: { type: DataTypes.BOOLEAN, field: 'imap_enabled', defaultValue: false },
 }, {
   sequelize,
   tableName: 'smtp_accounts',

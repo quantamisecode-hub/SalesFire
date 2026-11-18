@@ -14,11 +14,7 @@ import {
   Highlighter, Baseline,
 } from "lucide-react";
 import { lightClean } from "@/components/sequence/RichEmailEditor";
-
-const EMBEDDED_VARIABLES = [
-  "first_name", "last_name", "company_name", "job_title", "website", "email",
-  "location", "industry", "company_size", "phone", "linkedin",
-];
+import { buildVariableList } from "@/lib/variables";
 
 // Email-safe fonts accepted by execCommand('fontName') and rendered safely
 // by mail clients.
@@ -221,7 +217,7 @@ export function SignatureRichEditor({ html, onHtmlChange, knownVariables = [] }:
     setVarFallback("");
   };
 
-  const variables = [...new Set([...EMBEDDED_VARIABLES, ...knownVariables])];
+  const variables = buildVariableList(knownVariables);
 
   const ToolBtn = ({ onClick, active, title, children, danger }: {
     onClick: () => void; active?: boolean; title: string; children: React.ReactNode; danger?: boolean;
@@ -337,7 +333,7 @@ export function SignatureRichEditor({ html, onHtmlChange, knownVariables = [] }:
               <span className="text-xs font-semibold text-slate-600">Insert variable</span>
               <button type="button" onClick={() => setPopover(null)} aria-label="Close"><X size={13} /></button>
             </div>
-            <label className="text-xs text-slate-500 block mb-1">Fallback value (used when a recipient has no data)</label>
+            <label className="text-xs text-slate-500 block mb-1">Fallback value (used when a lead has no data)</label>
             <input value={varFallback} onChange={(e) => setVarFallback(e.target.value)} placeholder='e.g. "there"'
               className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 mb-2" aria-label="Variable fallback" />
             <div className="grid grid-cols-2 gap-1">

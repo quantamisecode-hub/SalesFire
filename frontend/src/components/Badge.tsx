@@ -28,6 +28,14 @@ const TONE_BY_STATUS: Record<string, string> = {
   approved: "bg-emerald-50 text-emerald-700 border border-emerald-200",
   contacted: "bg-indigo-50 text-indigo-700 border border-indigo-200",
   skipped: "bg-slate-100 text-slate-500 border border-slate-200",
+  interested: "bg-violet-50 text-violet-700 border border-violet-200",
+  meeting_completed: "bg-violet-50 text-violet-700 border border-violet-200",
+  meeting_completed_not_closed: "bg-amber-50 text-amber-700 border border-amber-200",
+  won: "bg-emerald-50 text-emerald-700 border border-emerald-200",
+  lost: "bg-red-50 text-red-700 border border-red-200",
+  not_interested: "bg-slate-100 text-slate-600 border border-slate-200",
+  out_of_office: "bg-sky-50 text-sky-700 border border-sky-200",
+  wrong_person: "bg-slate-100 text-slate-600 border border-slate-200",
 
   // email verification
   verified: "bg-emerald-50 text-emerald-700 border border-emerald-200",

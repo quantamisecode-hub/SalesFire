@@ -219,15 +219,36 @@ export const campaignService = {
 
   async listRecipients(
     campaignId: string,
-    params?: { status?: string; search?: string; page?: number; pageSize?: number },
+    params?: { status?: string; search?: string; page?: number; pageSize?: number; field?: string; op?: string; value?: string; owner?: string },
   ): Promise<RecipientListResponse> {
     const sp = new URLSearchParams();
     if (params?.status && params.status !== "all") sp.set("status", params.status);
     if (params?.search) sp.set("search", params.search);
     if (params?.page) sp.set("page", String(params.page));
     if (params?.pageSize) sp.set("pageSize", String(params.pageSize));
+    // Instantly "Data fields" + owner filters
+    if (params?.field && params?.op !== undefined) { sp.set("field", params.field); sp.set("op", params.op || "eq"); sp.set("value", params.value ?? ""); }
+    if (params?.owner) sp.set("owner", params.owner);
     const query = sp.toString() ? `?${sp.toString()}` : "";
     return api.get(`/campaigns/${campaignId}/recipients${query}`);
+  },
+
+  /** Move (or copy) selected recipients to another campaign (Instantly parity). */
+  async moveRecipients(
+    campaignId: string,
+    payload: { recipientIds?: string[]; leadIds?: string[]; targetCampaignId: string; copy?: boolean; resetStatus?: boolean; checkDuplicates?: boolean },
+  ): Promise<{ moved: number; copied: number; skipped: Array<{ email: string; reason: string }> }> {
+    const r = await api.post(`/campaigns/${campaignId}/recipients/move`, payload);
+    return (r as { data: { moved: number; copied: number; skipped: Array<{ email: string; reason: string }> } }).data;
+  },
+
+  /** Move (or copy) selected recipients into a CRM list. */
+  async moveRecipientsToList(
+    campaignId: string,
+    payload: { recipientIds?: string[]; leadIds?: string[]; targetListId: string; copy?: boolean },
+  ): Promise<{ added: number; copied: number; skipped: Array<{ email: string; reason: string }> }> {
+    const r = await api.post(`/campaigns/${campaignId}/recipients/move-to-list`, payload);
+    return (r as { data: { added: number; copied: number; skipped: Array<{ email: string; reason: string }> } }).data;
   },
 
   async removeRecipient(campaignId: string, recipientId: string): Promise<{ success: boolean }> {

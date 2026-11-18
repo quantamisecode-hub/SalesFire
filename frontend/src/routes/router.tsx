@@ -8,6 +8,9 @@ import { LoginPage } from "@/pages/LoginPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { CampaignListPage } from "@/pages/CampaignListPage";
+import { InboxPage } from "@/pages/InboxPage";
+import { ListsPage } from "@/pages/ListsPage";
+import { ListDetailPage } from "@/pages/ListDetailPage";
 import { CampaignCreatePage } from "@/pages/CampaignCreatePage";
 import { CampaignDetailPage } from "@/pages/CampaignDetailPage";
 import { CampaignRecipientsPage } from "@/pages/CampaignRecipientsPage";
@@ -35,6 +38,10 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: "dashboard", element: <DashboardPage /> },
       { path: "campaigns", element: <CampaignListPage /> },
+      { path: "campaigns/inbox", element: <InboxPage /> },
+      { path: "campaigns/inbox/:conversationId", element: <InboxPage /> },
+      { path: "lists", element: <ListsPage /> },
+      { path: "lists/:id", element: <ListDetailPage /> },
       { path: "campaigns/new", element: <CampaignCreatePage /> },
       { path: "campaigns/create", element: <Navigate to="/campaigns/new" replace /> },
       { path: "campaigns/:id", element: <CampaignDetailPage /> },

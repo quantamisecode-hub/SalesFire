@@ -99,8 +99,8 @@ export function SendingAccountsSection({ campaignId }: { campaignId: string }) {
     try {
       await campaignSendingPoolService.remove(campaignId, removal.poolId, policy);
       toast.success(
-        policy === "reassign" ? "Account removed; recipients will be reassigned on send."
-        : policy === "keep" ? "Account removed; assigned recipients keep it until completion."
+        policy === "reassign" ? "Account removed; leads will be reassigned on send."
+        : policy === "keep" ? "Account removed; assigned leads keep it until completion."
         : "Account removed; its queued sends were cancelled.",
       );
       setRemoval(null);
@@ -263,7 +263,7 @@ export function SendingAccountsSection({ campaignId }: { campaignId: string }) {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-label="Remove sending account">
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-md w-full p-5 space-y-3">
             <h3 className="text-base font-semibold text-slate-900 flex items-center gap-2">
-              <AlertTriangle size={17} className="text-amber-500" /> This account has {removal.scheduled} scheduled recipient{removal.scheduled === 1 ? "" : "s"}
+              <AlertTriangle size={17} className="text-amber-500" /> This account has {removal.scheduled} scheduled lead{removal.scheduled === 1 ? "" : "s"}
             </h3>
             <p className="text-sm text-slate-600">
               <span className="font-medium">{removal.email}</span> is assigned to upcoming sends. What should happen to them?
@@ -271,13 +271,13 @@ export function SendingAccountsSection({ campaignId }: { campaignId: string }) {
             <div className="space-y-2">
               <button type="button" disabled={removing} onClick={() => void applyRemovalPolicy("reassign")}
                 className="w-full text-left px-3 py-2.5 rounded-lg border border-slate-200 hover:border-primary hover:bg-primary/5 text-sm">
-                <span className="font-medium text-slate-800">Reassign eligible recipients</span><br />
+                <span className="font-medium text-slate-800">Reassign eligible leads</span><br />
                 <span className="text-xs text-slate-500">New sends go through the remaining accounts.</span>
               </button>
               <button type="button" disabled={removing} onClick={() => void applyRemovalPolicy("keep")}
                 className="w-full text-left px-3 py-2.5 rounded-lg border border-slate-200 hover:border-primary hover:bg-primary/5 text-sm">
                 <span className="font-medium text-slate-800">Keep assignments until they complete</span><br />
-                <span className="text-xs text-slate-500">Do not use this account for new sends; keep its assigned recipients.</span>
+                <span className="text-xs text-slate-500">Do not use this account for new sends; keep its assigned leads.</span>
               </button>
               <button type="button" disabled={removing} onClick={() => void applyRemovalPolicy("cancel")}
                 className="w-full text-left px-3 py-2.5 rounded-lg border border-slate-200 hover:border-red-300 hover:bg-red-50 text-sm">

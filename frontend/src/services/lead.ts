@@ -20,6 +20,10 @@ export const leadService = {
     page?: number; pageSize?: number; search?: string; sortBy?: string; sortDir?: string;
     status?: string; emailStatus?: string; industry?: string; companySize?: string; location?: string;
     minScore?: number; maxScore?: number; campaignId?: string;
+    /** Instantly "Data fields" filter — builtin (industry, company_name, …) or custom slug. */
+    field?: string; op?: string; value?: string;
+    /** 'unassigned' | 'all' | <userId> */
+    owner?: string;
   }): Promise<LeadListResponse> {
     const sp = new URLSearchParams();
     Object.entries(params || {}).forEach(([k, v]) => {
@@ -101,6 +105,14 @@ export const leadService = {
     return handle(fetch("/api/v1/leads/bulk/delete", {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leadIds }),
+    }));
+  },
+
+  /** Instantly lead-owner parity — round-robin assign to org members. */
+  async bulkAssign(leadIds: string[], memberIds: string[], campaignId?: string): Promise<{ data: { assigned: number; perMember: Record<string, number> } }> {
+    return handle(fetch("/api/v1/leads/bulk/assign", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leadIds, memberIds, campaignId, strategy: "round_robin" }),
     }));
   },
 

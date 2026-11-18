@@ -14,13 +14,49 @@ export interface Lead {
   companySize?: string;
   personalization?: string;
   customFields?: Record<string, string> | null;
-  status: string; // new | approved | contacted | replied | bounced | unsubscribed | suppressed | invalid
+  status: string; // progression: new | approved | contacted | replied | bounced | unsubscribed | suppressed | invalid | completed; interest: interested | meeting_completed | meeting_completed_not_closed | won | lost | not_interested | out_of_office | wrong_person
   emailStatus: string; // unknown | discovered | syntax_valid | domain_valid | mx_valid | verified | invalid | bounced | unsubscribed
   leadScore?: number | null;
   source?: string;
+  assignedTo?: string | null;
   createdAt: string;
   updatedAt: string;
   enrolledInCampaign?: boolean;
+}
+
+export interface Member {
+  id: string;
+  email: string;
+  fullName: string;
+  role: string;
+}
+
+export interface LeadList {
+  id: string;
+  name: string;
+  description: string | null;
+  createdBy: string | null;
+  memberCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LeadListDetail extends LeadList {
+  members: Array<{
+    id: string;
+    leadId: string;
+    addedAt: string;
+    lead: {
+      id: string;
+      firstName?: string;
+      lastName?: string;
+      companyName?: string;
+      email: string;
+      status: string;
+      emailStatus?: string;
+      assignedTo: string | null;
+    } | null;
+  }>;
 }
 
 export interface LeadListResponse {

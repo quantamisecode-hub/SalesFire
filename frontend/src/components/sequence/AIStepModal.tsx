@@ -1,7 +1,8 @@
 // AIStepModal — rewrite ONE email inside the current sequence (§25-26,
 // per-step regeneration). The model sees the neighbouring steps as read-only
-// context; the result is shown for review and applied only behind Accept —
-// everything else in the sequence stays exactly as it is.
+// context; the instruction field is treated as an editing note (never a new
+// system prompt); the result is shown side-by-side for review and applied
+// only behind Accept — everything else in the sequence stays exactly as it is.
 import { useEffect, useState } from "react";
 import { Loader2, Sparkles, CheckCircle2, XCircle } from "lucide-react";
 import { sequenceService } from "@/services/sequence";
@@ -17,6 +18,18 @@ export type AIStepModalProps = {
   onClose: () => void;
 };
 
+const PRESETS: Array<{ label: string; prompt: string }> = [
+  { label: "Shorten", prompt: "Make it much shorter and punchier — cut filler, keep the ask." },
+  { label: "More direct", prompt: "Make it more direct: state the value in the first line and get to the ask faster." },
+  { label: "Less salesy", prompt: "Remove salesy language and buzzwords; sound like a thoughtful peer, not a vendor." },
+  { label: "Warmer", prompt: "Make it warmer and more conversational while staying professional." },
+  { label: "Add urgency", prompt: "Add gentle, honest urgency around timing without pressure tactics." },
+  { label: "Stronger CTA", prompt: "Strengthen the call to action — propose a specific time to talk next week." },
+];
+
+const stripHtml = (html: string) => String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const wordCount = (html: string) => stripHtml(html).split(/\s+/).filter(Boolean).length;
+
 export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previous, next, onAccept, onClose }: AIStepModalProps) {
   const [prompt, setPrompt] = useState("");
   const [industry, setIndustry] = useState("");
@@ -24,12 +37,16 @@ export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previ
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generated, setGenerated] = useState<{ subject: string; bodyHtml: string; subjectPreserved?: boolean } | null>(null);
+  const [tab, setTab] = useState<"current" | "result">("current");
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Show the result as soon as it lands
+  useEffect(() => { if (generated) setTab("result"); }, [generated]);
 
   const generate = async () => {
     setBusy(true);
@@ -48,6 +65,8 @@ export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previ
   };
 
   const isFollowUp = stepNumber > 1;
+  const generatedWords = generated ? wordCount(generated.bodyHtml) : null;
+  const currentWords = wordCount(current.bodyHtml);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-label={`Rewrite email ${stepNumber} with AI`}
@@ -61,12 +80,21 @@ export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previ
           {generated && <> This version is shown for review; it is applied only when you press Accept.</>}
         </p>
 
-        <label className="text-xs font-medium text-slate-600 block mb-3">
+        <label className="text-xs font-medium text-slate-600 block mb-2">
           What should change about this email?
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={2} autoFocus
             placeholder="e.g. make it shorter and more direct; change the ask to a 15-min demo call; sound less salesy"
             className="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-violet-200 focus:border-violet-400" />
         </label>
+        {/* One-click instruction presets */}
+        <div className="mb-3 flex flex-wrap gap-1.5" aria-label="Quick instructions">
+          {PRESETS.map((p) => (
+            <button key={p.label} type="button" onClick={() => setPrompt(p.prompt)}
+              className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[10px] font-medium text-violet-700 transition hover:bg-violet-100 hover:border-violet-300">
+              {p.label}
+            </button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <label className="text-xs font-medium text-slate-600 block">
             Industry (optional)
@@ -90,22 +118,51 @@ export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previ
           </p>
         )}
 
-        {generated && (
-          <div className="space-y-2 mb-3">
-            <p className="text-[11px] font-semibold text-violet-600 uppercase">New version — review before accepting</p>
-            {generated.subjectPreserved && (
-              <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                The AI left the subject empty for the first email, which the sequence rules forbid — kept your current subject instead.
-              </p>
-            )}
-            <div className="rounded-lg border border-violet-200 bg-violet-50/40 p-3 text-xs">
-              <p className="font-medium text-slate-800">
+        {/* Current vs AI draft — side by side tabs */}
+        <div className="rounded-lg border border-slate-200 overflow-hidden mb-3">
+          <div className="flex border-b border-slate-200 bg-slate-50" role="tablist" aria-label="Compare versions">
+            <button type="button" role="tab" aria-selected={tab === "current"} onClick={() => setTab("current")}
+              className={`flex-1 px-3 py-2 text-xs font-semibold transition ${tab === "current" ? "border-b-2 border-primary-600 text-slate-900 bg-white" : "text-slate-500 hover:text-slate-800"}`}>
+              Current email <span className="tabular-nums text-slate-400">· {currentWords}w</span>
+            </button>
+            <button type="button" role="tab" aria-selected={tab === "result"} onClick={() => setTab("result")} disabled={!generated}
+              className={`flex-1 px-3 py-2 text-xs font-semibold transition ${tab === "result" ? "border-b-2 border-violet-600 text-violet-800 bg-white" : "text-slate-500 hover:text-slate-800 disabled:opacity-40"}`}>
+              AI draft {generated && <span className="tabular-nums text-violet-400">· {generatedWords}w</span>}
+            </button>
+          </div>
+
+          {tab === "current" && (
+            <div className="p-3 max-h-64 overflow-auto">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Subject</p>
+              <p className="text-xs font-medium text-slate-700">{current.subject || <span className="text-slate-400 italic">(no subject — thread continuation)</span>}</p>
+              <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Body</p>
+              <pre className="whitespace-pre-wrap text-xs text-slate-600 font-sans">{stripHtml(current.bodyHtml)}</pre>
+            </div>
+          )}
+          {tab === "result" && generated && (
+            <div className="p-3 max-h-64 overflow-auto bg-violet-50/30">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-500">Subject</p>
+                <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[9px] font-semibold text-violet-700">
+                  <Sparkles size={9} /> AI Generated
+                </span>
+              </div>
+              <p className="text-xs font-medium text-slate-800">
                 {generated.subject || <span className="text-slate-400 italic">(no subject — thread continuation)</span>}
               </p>
-              <pre className="whitespace-pre-wrap text-slate-600 font-sans mt-1 max-h-56 overflow-auto">{generated.bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()}</pre>
+              {generated.subjectPreserved && (
+                <p className="mt-1 text-[10px] text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-1">
+                  The AI left the subject empty, which email 1 forbids — your current subject was kept.
+                </p>
+              )}
+              <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-violet-500 mb-1">Body</p>
+              <pre className="whitespace-pre-wrap text-xs text-slate-700 font-sans">{stripHtml(generated.bodyHtml)}</pre>
+              <p className={`mt-1 text-[10px] tabular-nums ${generatedWords !== null && generatedWords >= 40 && generatedWords <= 150 ? "text-emerald-600" : "text-amber-600"}`}>
+                {generatedWords} words (target 50–130)
+              </p>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="flex gap-2">
           {generated ? (
@@ -114,13 +171,13 @@ export function AIStepModal({ campaignId, stepNumber, totalSteps, current, previ
                 className="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700">
                 <CheckCircle2 size={13} /> Accept this version
               </button>
-              <button type="button" onClick={() => setGenerated(null)} disabled={busy}
+              <button type="button" onClick={() => { setGenerated(null); setTab("current"); }} disabled={busy}
                 className="text-xs font-medium py-2 px-4 rounded-lg border border-slate-200 hover:bg-slate-50">Rewrite again</button>
             </>
           ) : (
             <button type="button" onClick={generate} disabled={busy || !campaignId}
               className="flex-1 inline-flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
-              {busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {isFollowUp ? `Rewrite email ${stepNumber}` : 'Rewrite email 1'}
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {isFollowUp ? `Rewrite email ${stepNumber}` : "Rewrite email 1"}
             </button>
           )}
           <button type="button" onClick={onClose} disabled={busy}

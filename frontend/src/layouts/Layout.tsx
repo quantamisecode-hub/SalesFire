@@ -1,7 +1,7 @@
 // Authenticated application shell: header + sidebar + main content.
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageLoadingBar } from "@/components/ui/PageLoadingBar";
 import {
   LayoutDashboard,
@@ -18,11 +18,15 @@ import {
   PenLine,
   PanelLeftClose,
   PanelLeftOpen,
+  List as ListIcon,
+  Inbox,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Megaphone, label: "Campaigns", href: "/campaigns" },
+  { icon: Inbox, label: "Unified Inbox", href: "/campaigns/inbox", badge: "inboxUnread" },
+  { icon: ListIcon, label: "Lists", href: "/lists" },
 ] as const;
 
 const EMAIL_SENDING_CHILDREN = [
@@ -37,6 +41,7 @@ function NavItem({
   active,
   onClick,
   collapsed = false,
+  badge,
 }: {
   icon: React.FC<{ size?: number | string; className?: string }>;
   label: string;
@@ -44,6 +49,7 @@ function NavItem({
   active: boolean;
   onClick: () => void;
   collapsed?: boolean;
+  badge?: number;
 }) {
   return (
     <a
@@ -61,6 +67,11 @@ function NavItem({
     >
       <Icon size={18} className={`shrink-0 ${active ? "text-primary-600" : "text-slate-400"}`} />
       {!collapsed && <span>{label}</span>}
+      {!collapsed && badge !== undefined && badge > 0 && (
+        <span aria-label={`${badge} unread`} className="ml-auto rounded-full bg-primary-600 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </a>
   );
 }
@@ -149,6 +160,22 @@ export function Layout() {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [inboxUnread, setInboxUnread] = useState(0);
+
+  // Poll the inbox unread count (real backend state) every 60s
+  useEffect(() => {
+    let alive = true;
+    const fetchCount = () => {
+      fetch("/api/v1/conversations/unread-count", { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (alive) setInboxUnread(d?.data?.unread || 0); })
+        .catch(() => { /* badge just stays stale */ });
+    };
+    fetchCount();
+    const t = window.setInterval(fetchCount, 60000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+  const [headerSearch, setHeaderSearch] = useState("");
   const [emailSendingOpen, setEmailSendingOpen] = useState(true);
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return window.localStorage.getItem("salesfire.sidebar.collapsed") === "1"; } catch { return false; }
@@ -161,7 +188,9 @@ export function Layout() {
   };
 
   const isActive = (href: string) =>
-    location.pathname === href || location.pathname.startsWith(href + "/");
+    href === "/campaigns"
+      ? location.pathname === href || (location.pathname.startsWith("/campaigns") && !location.pathname.startsWith("/campaigns/inbox"))
+      : location.pathname === href || location.pathname.startsWith(href + "/");
 
   const emailSendingActive = EMAIL_SENDING_CHILDREN.some((c) => isActive(c.href));
 
@@ -214,17 +243,29 @@ export function Layout() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative hidden md:block">
+            {/* Global search — jumps to the campaigns list filtered by query */}
+            <form
+              className="relative hidden md:block"
+              role="search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const q = headerSearch.trim();
+                navigate(q ? `/campaigns?q=${encodeURIComponent(q)}` : "/campaigns");
+              }}
+            >
               <Search
                 size={15}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
               />
               <input
                 type="text"
+                value={headerSearch}
+                onChange={(e) => setHeaderSearch(e.target.value)}
                 placeholder="Search campaigns..."
+                aria-label="Search campaigns"
                 className="w-56 rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-700 placeholder-slate-400 outline-none transition focus:border-primary-400 focus:bg-white focus:ring-2 focus:ring-primary-100"
               />
-            </div>
+            </form>
 
             {/* User menu */}
             <div className="relative">
@@ -296,6 +337,7 @@ export function Layout() {
                 active={isActive(item.href)}
                 onClick={() => go(item.href)}
                 collapsed={collapsed}
+                badge={"badge" in item && item.badge === "inboxUnread" ? inboxUnread : undefined}
               />
             ))}
             <NavGroup

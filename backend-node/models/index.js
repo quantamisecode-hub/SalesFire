@@ -23,6 +23,8 @@ const WarmupPlan = require('./warmup-plan');
 const EmailSignature = require('./email-signature');
 const SendingAccountUsage = require('./sending-account-usage');
 const AuditLog = require('./audit-log');
+const { LeadList, LeadListMember } = require('./lead-list');
+const { Conversation, EmailMessage, MailboxSyncState, ConversationDraft, ConversationInsight, Notification } = require('./inbox');
 
 // Run associations (each model defines static associate) - unique models only
 const models = {
@@ -48,6 +50,14 @@ const models = {
   EmailSignature,
   SendingAccountUsage,
   AuditLog,
+  LeadList,
+  LeadListMember,
+  Conversation,
+  EmailMessage,
+  MailboxSyncState,
+  ConversationDraft,
+  ConversationInsight,
+  Notification,
 };
 
 Object.values(models).forEach((model) => {
@@ -75,5 +85,13 @@ models.WarmupPlans = WarmupPlan;
 models.EmailSignatures = EmailSignature;
 models.SendingAccountUsages = SendingAccountUsage;
 models.AuditLogs = AuditLog;
+models.LeadLists = LeadList;
+models.LeadListMembers = LeadListMember;
+models.Conversations = Conversation;
+models.EmailMessages = EmailMessage;
+models.MailboxSyncStates = MailboxSyncState;
+models.ConversationDrafts = ConversationDraft;
+models.ConversationInsights = ConversationInsight;
+models.Notifications = Notification;
 
 module.exports = models;
