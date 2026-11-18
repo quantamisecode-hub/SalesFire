@@ -137,6 +137,17 @@ async function verifyEmail(email, { resolveMx = dns.resolveMx, timeoutMs = 5000 
     ]);
     result.mxRecords = (mx || []).map((r) => ({ exchange: r.exchange, priority: r.priority }));
     result.hasMx = result.mxRecords.length > 0;
+    // RFC 7505 null MX (".") or empty exchange means the domain explicitly
+    // refuses mail. A non-empty MX set is NOT proof the domain accepts mail.
+    if (result.mxRecords.length > 0 && result.mxRecords.every((r) => !r.exchange || r.exchange === '.')) {
+      result.reasons.push('null_mx_record');
+      result.hasMx = false;
+      result.isNullMx = true;
+      result.status = 'invalid';
+      result.riskScore = 100;
+      result.durationMs = Date.now() - started;
+      return result;
+    }
     if (!result.hasMx) {
       result.reasons.push('no_mx_records');
       result.status = 'invalid'; // domain cannot receive mail at all

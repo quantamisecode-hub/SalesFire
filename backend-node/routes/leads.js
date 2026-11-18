@@ -232,7 +232,7 @@ router.post('/import/preview', uploadSingle, async (req, res) => {
 // Validate with the user's mapping → real counts + error rows (§23-27).
 router.post('/import/validate', express.json({ limit: '12mb' }), async (req, res) => {
   try {
-    const { headers, rows, mapping, duplicateStrategy } = req.body || {};
+    const { headers, rows, mapping, duplicateStrategy, campaignId } = req.body || {};
     if (!Array.isArray(rows) || !Array.isArray(headers)) return res.status(422).json({ error: 'Missing parsed rows — upload the file first' });
     if (rows.length > leadImport.MAX_ROWS) return res.status(422).json({ error: 'Too many rows' });
     if (!mapping || !(Object.values(mapping)).includes(leadImport.EMAIL_FIELD)) {
@@ -243,7 +243,14 @@ router.post('/import/validate', express.json({ limit: '12mb' }), async (req, res
         return res.status(422).json({ error: `Invalid custom variable name: ${v}` });
       }
     }
-    const result = await leadImport.validateImport(rows, mapping, duplicateStrategy === 'update' ? 'update' : 'skip', req.user.org);
+    // campaignId may arrive for import-into-campaign flows (§35) — validate it belongs to the org.
+    let verifiedCampaignId = null;
+    if (campaignId) {
+      const camp = await models.Campaign.findOne({ where: { id: String(campaignId), organizationId: req.user.org }, attributes: ['id'] });
+      if (!camp) return res.status(404).json({ error: 'Campaign not found' });
+      verifiedCampaignId = camp.id;
+    }
+    const result = await leadImport.validateImport(rows, mapping, duplicateStrategy === 'update' ? 'update' : 'skip', req.user.org, verifiedCampaignId);
     res.json({
       success: true,
       data: {
@@ -254,6 +261,7 @@ router.post('/import/validate', express.json({ limit: '12mb' }), async (req, res
           missingEmail: result.counts.missingEmail,
           duplicateInFile: result.counts.duplicateInFile,
           duplicateExisting: result.counts.duplicateExisting,
+          campaignEnrolled: result.counts.campaignEnrolled,
           suppressed: result.counts.suppressed,
         },
         errors: result.rowErrors.slice(0, 50),

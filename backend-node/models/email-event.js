@@ -56,6 +56,19 @@ EmailEvent.init({
   metadata: {
     type: DataTypes.JSON,
   },
+  // PROMPT 9.1 — account attribution (no secrets; ids only).
+  sendingAccountId: {
+    type: DataTypes.UUID,
+    field: 'sending_account_id',
+  },
+  sequenceStepId: {
+    type: DataTypes.UUID,
+    field: 'sequence_step_id',
+  },
+  variantId: {
+    type: DataTypes.UUID,
+    field: 'variant_id',
+  },
 }, {
   sequelize,
   tableName: 'email_events',

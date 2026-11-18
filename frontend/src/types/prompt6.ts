@@ -4,6 +4,12 @@
 
 // ---- SMTP sending accounts (settings/email-sending) ----
 
+export interface PerDayWindow {
+  enabled: boolean;
+  start: string; // HH:MM (account-local timezone)
+  end: string;
+}
+
 export interface SmtpAccount {
   id: string;
   name: string;
@@ -19,11 +25,24 @@ export interface SmtpAccount {
   hourlyLimit?: number;
   minDelayMinutes?: number;
   maxDelayMinutes?: number;
+  /** Instantly-style minimum gap (minutes) between sends from this account across ALL campaigns. */
+  minimumWaitMinutes?: number;
   isEnabled: boolean;
   status: string; // unverified | verified | error
+  /** PROMPT 9.1 */
+  healthStatus?: string; // healthy | warning | critical | unknown
+  warmupStatus?: string; // not_started | warming | active | paused | completed
+  warmupDailyLimit?: number | null;
+  timezone?: string; // IANA identifier
+  sendingSchedule?: Record<string, PerDayWindow> | null;
+  lastSentAt?: string;
+  sentToday?: number;
+  sentThisHour?: number;
+  remainingToday?: number | null;
+  remainingThisHour?: number | null;
+  activeCampaigns?: number;
   lastTestedAt?: string;
   lastTestResult?: string;
-  /** Signature resolution (Prompt 9): inherit | custom | none. */
   signatureMode?: "inherit" | "custom" | "none";
   /** Server id of the chosen signature when signatureMode === "custom". */
   signatureId?: string | null;
@@ -49,6 +68,12 @@ export interface SmtpAccountInput {
   hourlyLimit?: number;
   minDelayMinutes?: number;
   maxDelayMinutes?: number;
+  /** Instantly-style minimum gap (minutes) between sends from this account across ALL campaigns. */
+  minimumWaitMinutes?: number;
+  /** PROMPT 9.1 */
+  timezone?: string;
+  sendingSchedule?: Record<string, PerDayWindow> | null;
+  warmupDailyLimit?: number | null;
   /** Signature resolution (Prompt 9): inherit | custom | none. */
   signatureMode?: "inherit" | "custom" | "none";
   signatureId?: string | null;
@@ -153,6 +178,16 @@ export interface EmailEventListResponse {
 
 // ---- Event-based analytics ----
 
+export interface CampaignAccountMetric {
+  accountId: string;
+  email: string;
+  fromName?: string | null;
+  sent: number;
+  replied: number;
+  bounced: number;
+  failed: number;
+}
+
 export interface CampaignAnalyticsV2 {
   campaignId: string;
   status: string;
@@ -170,6 +205,8 @@ export interface CampaignAnalyticsV2 {
   bounceRate: number;
   unsubscribeRate: number;
   failureRate: number;
+  /** PROMPT 9.1 §44 — per sending account, from the event log. */
+  accounts?: CampaignAccountMetric[];
 }
 
 export interface CampaignAnalyticsV2Response {

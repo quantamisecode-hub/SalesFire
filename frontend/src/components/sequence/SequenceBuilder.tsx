@@ -25,6 +25,7 @@ import { SpamCheckPanel } from "./SpamCheckPanel";
 import { SendTestModal } from "./SendTestModal";
 import { ValidationPanel } from "./ValidationPanel";
 import { AISequenceModal } from "./AISequenceModal";
+import { AIStepModal } from "./AIStepModal";
 import { sequenceService } from "@/services/sequence";
 import { joinCampaign, leaveCampaign, onSequenceSaved, requestValidate } from "@/socket";
 import { signatureService, type EmailSignature } from "@/services/signature";
@@ -73,6 +74,19 @@ export const newVariantDraft = (v?: Partial<VariantDraft>): VariantDraft => ({
   weight: 0,
   ...v,
 });
+
+/**
+ * Effective subject/body of a step: variant content when the step uses A/B
+ * variants, otherwise the base step templates. Null when there is no step.
+ */
+const stepContent = (step?: StepDraft): { subject: string; bodyHtml: string } | null => {
+  if (!step) return null;
+  const source = step.variants?.length ? step.variants[0] : step;
+  return {
+    subject: (source as { subject?: string; subjectTemplate?: string }).subject ?? (source as { subjectTemplate?: string }).subjectTemplate ?? "",
+    bodyHtml: (source as { bodyHtml?: string; bodyTemplate?: string }).bodyHtml ?? (source as { bodyTemplate?: string }).bodyTemplate ?? "",
+  };
+};
 
 /** Redistribute weights equally, forcing the exact total of 100. */
 export function redistribute(variants: VariantDraft[]): VariantDraft[] {
@@ -131,6 +145,7 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
     const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: "idle" });
     const [showTestModal, setShowTestModal] = useState(false);
     const [showAI, setShowAI] = useState(false);
+    const [rewriteStepIndex, setRewriteStepIndex] = useState<number | null>(null);
     const [, forceTick] = useState(0);
     // Org signatures for the per-step override picker (Prompt 9).
     const [orgSignatures, setOrgSignatures] = useState<EmailSignature[]>([]);
@@ -457,6 +472,27 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
       setShowAI(false);
     };
 
+    // Single-step rewrite: replace ONLY that step, leaving every other step,
+    // its variants, delay and identity exactly as they are.
+    const acceptRewriteStep = (subject: string, bodyHtml: string) => {
+      const idx = rewriteStepIndex ?? selectedStep;
+      onChange(stepsRef.current.map((s, i) => {
+        if (i !== idx) return s;
+        const hasVariants = s.variants.length > 0;
+        return {
+          ...s,
+          subjectTemplate: subject,
+          bodyTemplate: bodyHtml,
+          // Keep variants in sync with the base step so the save/validate
+          // pipeline stays consistent (A/B variants may diverge later).
+          variants: hasVariants
+            ? s.variants.map((v, vi) => (vi === 0 ? { ...v, subject, bodyHtml } : v))
+            : s.variants,
+        };
+      }));
+      setRewriteStepIndex(null);
+    };
+
     const jumpToIssue = (issue: ValidationIssue) => {
       const stepIdx = issue.stepId
         ? stepsRef.current.findIndex((s) => s.id === issue.stepId || s.key === issue.stepId)
@@ -580,6 +616,8 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
                 placeholder={`Email ${selectedStep + 1} name`} aria-label="Step name"
                 className="text-sm font-semibold text-slate-800 border-0 p-0 focus:ring-0 placeholder:text-slate-300 max-w-[240px]" />
               <div className="flex items-center gap-1">
+                <button type="button" aria-label="Rewrite this email with AI" title="Rewrite this email with AI — the rest of the sequence stays untouched" onClick={() => setRewriteStepIndex(selectedStep)}
+                  className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold text-violet-700 bg-violet-50 border border-violet-200 hover:bg-violet-100 rounded-lg"><Sparkles size={12} /> AI</button>
                 <button type="button" aria-label="Move up" disabled={selectedStep === 0} onClick={() => moveStep(selectedStep, -1)}
                   className="p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg disabled:opacity-30"><ArrowUp size={14} /></button>
                 <button type="button" aria-label="Move down" disabled={selectedStep === steps.length - 1} onClick={() => moveStep(selectedStep, 1)}
@@ -720,18 +758,18 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
               />
             )}
 
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between flex-wrap gap-2 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 min-w-0 w-full">
                 <button type="button" onClick={() => setShowTestModal(true)}
                   disabled={!campaignId || !((currentVariant ? currentVariant.bodyHtml : current.bodyTemplate) || (currentVariant ? currentVariant.bodyText : current.bodyTemplate))}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50">
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap">
                   <Send size={12} /> Send test email
                 </button>
                 <SpamCheckPanel campaignId={campaignId}
                   getSubject={() => (currentVariant ? currentVariant.subject : current.subjectTemplate)}
                   getBodyHtml={() => (currentVariant ? currentVariant.bodyHtml : current.bodyTemplate)} />
               </div>
-              <span className="text-[11px] text-slate-400">{totalWords} words · autosaves 1.5s after you stop typing · ⌘S to save now</span>
+              <span className="text-[11px] text-slate-400 whitespace-nowrap">{totalWords} words · autosaves 1.5s after you stop typing · ⌘S to save now</span>
             </div>
           </div>
 
@@ -777,6 +815,15 @@ export const SequenceBuilder = forwardRef<SequenceBuilderHandle, SequenceBuilder
         {showAI && (
           <AISequenceModal campaignId={campaignId} hasExistingSteps={steps.length > 0}
             onAccept={acceptAISequence} onClose={() => setShowAI(false)} />
+        )}
+        {rewriteStepIndex !== null && (
+          <AIStepModal campaignId={campaignId}
+            stepNumber={rewriteStepIndex + 1} totalSteps={steps.length}
+            current={stepContent(steps[rewriteStepIndex])!}
+            previous={stepContent(steps[rewriteStepIndex - 1])}
+            next={stepContent(steps[rewriteStepIndex + 1])}
+            onAccept={acceptRewriteStep}
+            onClose={() => setRewriteStepIndex(null)} />
         )}
       </div>
     );

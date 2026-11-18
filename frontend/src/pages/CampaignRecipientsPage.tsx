@@ -109,7 +109,7 @@ export function CampaignRecipientsPage() {
       setRecipients(res.data || []);
       setPagination({ page: res.pagination.page, pages: res.pagination.pages, total: res.pagination.total });
     } catch {
-      setError("Failed to load recipients.");
+      setError("Failed to load leads.");
     } finally {
       setIsLoading(false);
     }
@@ -138,7 +138,7 @@ export function CampaignRecipientsPage() {
       toast.success(`${r.email} removed from the campaign.`);
       await load();
     } catch (err: any) {
-      toast.error(err?.data?.error || "Failed to remove the recipient.");
+      toast.error(err?.data?.error || "Failed to remove the lead.");
     } finally {
       setRemovingId(null);
     }
@@ -153,16 +153,16 @@ export function CampaignRecipientsPage() {
       <header>
         <h1 className="text-2xl font-semibold text-slate-900 flex items-center gap-2">
           <Users size={22} className="text-primary" aria-hidden />
-          Recipients
+          Leads
         </h1>
-        {campaign && <p className="text-sm text-slate-500 mt-1">{campaign.name} · {pagination.total} recipients</p>}
+        {campaign && <p className="text-sm text-slate-500 mt-1">{campaign.name} · {pagination.total} leads</p>}
       </header>
 
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={verifyAll} disabled={verifyBusy}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 disabled:opacity-60">
           {verifyBusy ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}
-          {verifyBusy ? "Verifying recipients…" : "Verify all emails"}
+          {verifyBusy ? "Verifying leads…" : "Verify all emails"}
         </button>
         {verifySummary && (
           <span className="text-[11px] text-slate-600" role="status">
@@ -192,7 +192,7 @@ export function CampaignRecipientsPage() {
         <form onSubmit={submitSearch} className="sm:ml-auto flex gap-2">
           <input
             type="search"
-            aria-label="Search recipients"
+            aria-label="Search leads"
             placeholder="Search name, email, company…"
             className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 w-56 focus:outline-none focus:ring-2 focus:ring-primary/40"
             value={searchInput}
@@ -217,8 +217,8 @@ export function CampaignRecipientsPage() {
         ) : recipients.length === 0 ? (
           <div className="p-12 text-center">
             <Users className="mx-auto text-slate-300 mb-3" size={36} aria-hidden />
-            <h3 className="text-sm font-semibold text-slate-900">No recipients found</h3>
-            <p className="text-sm text-slate-500 mt-1">Add recipients from the campaign wizard's audience step.</p>
+            <h3 className="text-sm font-semibold text-slate-900">No leads found</h3>
+            <p className="text-sm text-slate-500 mt-1">Add leads from the campaign wizard's Leads step.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -257,7 +257,7 @@ export function CampaignRecipientsPage() {
                       <button
                         onClick={() => remove(r)}
                         disabled={removingId === r.id}
-                        title="Remove recipient"
+                        title="Remove lead"
                         aria-label={`Remove ${r.email}`}
                         className="p-2 rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary/40"
                       >
@@ -275,7 +275,7 @@ export function CampaignRecipientsPage() {
       {dialog}
 
       {pagination.pages > 1 && (
-        <nav className="flex items-center justify-between" aria-label="Recipient pages">
+        <nav className="flex items-center justify-between" aria-label="Lead pages">
           <span className="text-xs text-slate-500">Page {pagination.page} of {pagination.pages}</span>
           <div className="flex gap-2">
             <button

@@ -93,20 +93,55 @@ export function CampaignAnalyticsPage() {
         <RateCard label="Unsubscribe Rate" value={analytics.unsubscribeRate} hint={`${analytics.unsubscribed} unsubs / ${analytics.sent} sent`} />
       </div>
 
+      {/* Per-account breakdown (§44) */}
+      {analytics.accounts && analytics.accounts.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center gap-2">
+            <Send size={15} className="text-slate-400" aria-hidden />
+            <h2 className="text-sm font-semibold text-slate-900">Sending accounts</h2>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-5 py-2.5">Account</th>
+                <th className="text-right px-5 py-2.5">Sent</th>
+                <th className="text-right px-5 py-2.5">Replies</th>
+                <th className="text-right px-5 py-2.5">Bounces</th>
+                <th className="text-right px-5 py-2.5">Failed</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {analytics.accounts.map((a) => (
+                <tr key={a.accountId}>
+                  <td className="px-5 py-2.5">
+                    <span className="font-medium text-slate-800">{a.email}</span>
+                    {a.fromName && <span className="block text-xs text-slate-500">{a.fromName}</span>}
+                  </td>
+                  <td className="px-5 py-2.5 text-right tabular-nums">{a.sent}</td>
+                  <td className="px-5 py-2.5 text-right tabular-nums">{a.replied}</td>
+                  <td className="px-5 py-2.5 text-right tabular-nums">{a.bounced}</td>
+                  <td className="px-5 py-2.5 text-right tabular-nums">{a.failed}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Audience overview */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <h2 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
           <Users size={15} className="text-slate-400" aria-hidden /> Audience
         </h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-          <Metric label="Total recipients" value={analytics.totalRecipients} />
+          <Metric label="Total leads" value={analytics.totalRecipients} />
           <Metric label="Active" value={analytics.activeRecipients} />
           <Metric label="Queued jobs" value={analytics.queued} />
           <Metric label="Soft failures (retrying)" value={analytics.softFailed} />
         </div>
         <div className="mt-3">
           <Link to={`/campaigns/${id}/recipients`} className="text-sm font-medium text-primary hover:underline">
-            View recipient list →
+            View leads list →
           </Link>
         </div>
       </div>

@@ -1,10 +1,21 @@
-// CampaignSendingAccount Model - Prompt 5
+// CampaignSendingAccount Model - PROMPT 9.1: campaign sending-account POOL.
+// This REPLACES the legacy Prompt 5 stub (which stored plaintext SMTP passwords
+// per campaign and was never used by the send path). One row = one account's
+// membership in one campaign's pool, with its distribution weight.
+//
+//   Campaign 1---n CampaignSendingAccount n---1 SmtpAccount
+//
+// The campaign-level strategy (round_robin | weighted | availability_based) and
+// stickiness/fallback live on the Campaign row. Weights only matter for the
+// 'weighted' strategy and must sum to 100 across the enabled pool.
 const { DataTypes, Model } = require('sequelize');
 const { sequelize } = require('../db');
 
 class CampaignSendingAccount extends Model {
   static associate(models) {
-    this.belongsTo(models.Campaign, { as: 'campaign', foreignKey: 'campaign_id' });
+    this.belongsTo(models.Campaign, { as: 'campaign', foreignKey: 'campaignId' });
+    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'smtpAccountId' });
+    this.belongsTo(models.Organization, { as: 'organization', foreignKey: 'organizationId' });
   }
 }
 
@@ -21,58 +32,35 @@ CampaignSendingAccount.init({
   },
   organizationId: {
     type: DataTypes.UUID,
+    allowNull: false,
     field: 'organization_id',
   },
-  emailAddress: {
-    type: DataTypes.STRING(255),
+  smtpAccountId: {
+    type: DataTypes.UUID,
     allowNull: false,
-    field: 'email_address',
+    field: 'smtp_account_id',
   },
-  displayName: {
-    type: DataTypes.STRING(255),
-    allowNull: true,
-    field: 'display_name',
-  },
-  smtpHost: {
-    type: DataTypes.STRING(255),
-    allowNull: true,
-    field: 'smtp_host',
-  },
-  smtpPort: {
+  // Distribution weight (percent). Only meaningful for strategy=weighted.
+  weight: {
     type: DataTypes.INTEGER,
-    allowNull: true,
-    field: 'smtp_port',
+    allowNull: false,
+    defaultValue: 100,
+    validate: { min: 0, max: 100 },
   },
-  smtpUsername: {
-    type: DataTypes.STRING(255),
-    allowNull: true,
-    field: 'smtp_username',
-  },
-  // Stored encrypted-at-rest in production; never returned to the client.
-  smtpPassword: {
-    type: DataTypes.TEXT,
-    allowNull: true,
-    field: 'smtp_password',
-  },
-  status: {
-    type: DataTypes.STRING(50),
-    defaultValue: 'active',
-  },
-  lastTestedAt: {
-    type: DataTypes.DATE,
-    allowNull: true,
-    field: 'last_tested_at',
-  },
-  lastTestResult: {
-    type: DataTypes.STRING(255),
-    allowNull: true,
-    field: 'last_test_result',
+  enabled: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: true,
   },
 }, {
   sequelize,
-  tableName: 'campaign_sending_accounts',
-  timestamps: true,
+  tableName: 'campaign_account_pools',
   underscored: true,
+  indexes: [
+    { unique: true, fields: ['campaign_id', 'smtp_account_id'] },
+    { fields: ['smtp_account_id'] },
+    { fields: ['organization_id'] },
+  ],
 });
 
 module.exports = CampaignSendingAccount;

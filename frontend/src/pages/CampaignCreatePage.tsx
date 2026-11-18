@@ -1,24 +1,26 @@
-// Campaign Create/Edit wizard - Prompt 6 §7-19.
-// 7 steps: Details → Audience → Sequence → Personalization → Schedule →
-// Review → Launch. Data persists server-side: the draft campaign row is
-// created when leaving step 1 and updated on every later step. Moving
-// backward and forward never loses data.
+// Campaign Create/Edit wizard - Prompt 6 §7-19 + Instantly/Smartlead-style simplification.
+// 6 steps: Details → Leads → Sequence → Schedule → Sending Accounts → Review & Launch.
+// AI personalization lives inside the Sequence editor (Generate with AI) — no
+// standalone personalization page. Review & launch are one screen. Sending
+// accounts (pool, rotation, weights) are configured on step 5 and validated
+// by the backend at launch.
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
   ChevronLeft, ChevronRight, Loader2,
-  Rocket, Eye, Sparkles, CheckCircle2, XCircle, AlertTriangle,
+  Rocket, AlertTriangle, CheckCircle2, XCircle,
 } from "lucide-react";
 import { campaignService } from "@/services/campaign";
 import { onCampaignUpdated, onSequenceSaved } from "@/socket";
 import { AudienceStep } from "@/components/leads/AudienceStep";
-import { emailSendingService } from "@/services/emailSending";
-import { SequenceBuilder, buildSequencePayload, type SequenceBuilderHandle } from "@/components/sequence/SequenceBuilder";
+import { campaignSendingPoolService, type PoolAccount, type PoolValidation } from "@/services/campaignSendingPool";
+import { SequenceBuilder, type SequenceBuilderHandle } from "@/components/sequence/SequenceBuilder";
+import { SendingAccountsSection } from "@/components/campaign/SendingAccountsSection";
 import { useToast } from "@/components/ui/Toast";
-import type { SmtpAccount, CampaignRecipient, AudienceCounts } from "@/types/prompt6";
+import type { CampaignRecipient, AudienceCounts } from "@/types/prompt6";
 import type { StepDraft } from "@/types/sequence";
 
-const STEPS = ["Details", "Leads", "Sequence", "Personalization", "Schedule", "Review", "Launch"];
+const STEPS = ["Details", "Leads", "Sequence", "Schedule", "Sending Accounts", "Review & Launch"];
 const STEP_STORAGE_PREFIX = "salesfire.campaign-wizard.step.";
 const readPersistedStep = (campaignId: string | null): number => {
   if (!campaignId) return 1;
@@ -46,6 +48,29 @@ const newStep = (): StepDraft => ({
   variants: [],
 });
 
+/** Map a persisted sequence (steps+variants with server ids) to wizard drafts. */
+function hydrateSteps(seq: { steps?: any[] }): StepDraft[] {
+  return (seq.steps || [])
+    .slice()
+    .sort((a, b) => a.stepOrder - b.stepOrder)
+    .map((s: any) => ({
+      key: s.id,
+      id: s.id,
+      name: s.name,
+      subjectTemplate: s.subjectTemplate,
+      bodyTemplate: s.bodyTemplate,
+      delayDays: s.delayDays,
+      delayHours: s.delayHours,
+      delayMinutes: s.delayMinutes || 0,
+      signatureMode: s.signatureMode || "inherit",
+      signatureId: s.signatureId || null,
+      variants: (s.variants || []).map((v: any) => ({
+        key: v.id, id: v.id, variantName: v.variantName,
+        subject: v.subject, bodyHtml: v.bodyHtml, bodyText: v.bodyText, weight: v.weight,
+      })),
+    }));
+}
+
 export function CampaignCreatePage() {
   const [liveNotice, setLiveNotice] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -67,7 +92,7 @@ export function CampaignCreatePage() {
   const [description, setDescription] = useState("");
   const [sendingAccountId, setSendingAccountId] = useState("");
   const [timezone, setTimezone] = useState("UTC");
-  const [accounts, setAccounts] = useState<SmtpAccount[]>([]);
+
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
 
   // Step 2 - audience
@@ -78,17 +103,9 @@ export function CampaignCreatePage() {
   const [sequenceId, setSequenceId] = useState<string | null>(null);
   const [steps, setSteps] = useState<StepDraft[]>([newStep()]);
 
-  // Step 4 - personalization
-  const [aiEnabled, setAiEnabled] = useState(true);
-  const [aiDepth, setAiDepth] = useState("standard");
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [aiText, setAiText] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ subject: string; text: string } | null>(null);
-  const [previewBusy, setPreviewBusy] = useState(false);
-
-  // Step 5 - schedule
+  // Step 4 - schedule
   const [startAt, setStartAt] = useState("");
+  const [endAt, setEndAt] = useState("");
   const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [startHour, setStartHour] = useState("9");
   const [endHour, setEndHour] = useState("17");
@@ -96,6 +113,9 @@ export function CampaignCreatePage() {
   const [hourlyLimit, setHourlyLimit] = useState("30");
   const [minDelay, setMinDelay] = useState("5");
   const [maxDelay, setMaxDelay] = useState("15");
+  const [preset, setPreset] = useState<"anytime" | "office" | "custom">(
+    "custom"
+  );
 
   // Wizard plumbing
   const [isSaving, setIsSaving] = useState(false);
@@ -116,15 +136,11 @@ export function CampaignCreatePage() {
     } catch { /* refresh failures surface on save */ return null; }
   }, []);
 
-  // Boot: load accounts; in edit mode also load the campaign.
+  // Boot: in edit mode also load the campaign (accounts are loaded by the
+  // Sending Accounts step and preview selector on demand).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const accRes = await emailSendingService.listAccounts();
-        if (!cancelled) setAccounts(accRes.data || []);
-      } catch { /* dropdown shows empty state */ }
-
       if (editId) {
         try {
           const res = await campaignService.get(editId);
@@ -134,18 +150,28 @@ export function CampaignCreatePage() {
           setDescription(c.description || "");
           setSendingAccountId(c.sendingAccountId || "");
           setTimezone(c.timezone || "UTC");
-          setAiEnabled(Boolean(c.aiPersonalizationEnabled));
-          setAiDepth(c.aiPersonalizationDepth || "standard");
+          if (c.scheduledStartAt) {
+            setStartAt(new Date(c.scheduledStartAt).toISOString().slice(0, 16));
+          }
+          if (c.scheduledEndAt) {
+            setEndAt(new Date(c.scheduledEndAt).toISOString().slice(0, 16));
+          }
           setDays(c.sendDaysOfWeek?.length ? c.sendDaysOfWeek : [1, 2, 3, 4, 5]);
           setStartHour(c.sendBetweenStartHour != null ? String(c.sendBetweenStartHour) : "9");
           setEndHour(c.sendBetweenEndHour != null ? String(c.sendBetweenEndHour) : "17");
+          // Auto-select the preset matching the stored schedule (Instantly parity).
+          const storedDays = [...(c.sendDaysOfWeek ?? [1, 2, 3, 4, 5])].sort().join(",");
+          if (storedDays === "1,2,3,4,5,6,7" && (c.sendBetweenStartHour ?? 9) === 0 && (c.sendBetweenEndHour ?? 17) === 24) {
+            setPreset("anytime");
+          } else if (storedDays === "1,2,3,4,5" && (c.sendBetweenStartHour ?? 9) === 9 && (c.sendBetweenEndHour ?? 17) === 17) {
+            setPreset("office");
+          } else {
+            setPreset("custom");
+          }
           setDailyLimit(c.maxEmailsPerDay != null ? String(c.maxEmailsPerDay) : "300");
           setHourlyLimit(c.hourlyLimit != null ? String(c.hourlyLimit) : "30");
           setMinDelay(c.minDelayMinutes != null ? String(c.minDelayMinutes) : "5");
           setMaxDelay(c.maxDelayMinutes != null ? String(c.maxDelayMinutes) : "15");
-          if (c.scheduledStartAt) {
-            setStartAt(new Date(c.scheduledStartAt).toISOString().slice(0, 16));
-          }
           const [seqRes, recRes] = await Promise.all([
             campaignService.listSequences(editId),
             campaignService.listRecipients(editId, { pageSize: 50 }),
@@ -155,22 +181,7 @@ export function CampaignCreatePage() {
             setSequenceId(seq.id);
             setSteps(
               (seq.steps || []).length
-                ? (seq.steps as any[]).sort((a, b) => a.stepOrder - b.stepOrder).map((s: any) => ({
-                    key: s.id,
-                    id: s.id,
-                    name: s.name,
-                    subjectTemplate: s.subjectTemplate,
-                    bodyTemplate: s.bodyTemplate,
-                    delayDays: s.delayDays,
-                    delayHours: s.delayHours,
-                    delayMinutes: s.delayMinutes || 0,
-                    signatureMode: s.signatureMode || "inherit",
-                    signatureId: s.signatureId || null,
-                    variants: (s.variants || []).map((v: any) => ({
-                      key: v.id, id: v.id, variantName: v.variantName,
-                      subject: v.subject, bodyHtml: v.bodyHtml, bodyText: v.bodyText, weight: v.weight,
-                    })),
-                  }))
+                ? hydrateSteps(seq)
                 : [newStep()]
             );
           }
@@ -200,7 +211,6 @@ export function CampaignCreatePage() {
   const saveDetails = async (): Promise<boolean> => {
     const errors: Record<string, string> = {};
     if (!name.trim()) errors.name = "Campaign name is required";
-    if (!sendingAccountId) errors.sendingAccountId = "Select a sending account";
     if (!timezone) errors.timezone = "Timezone is required";
     setDetailErrors(errors);
     if (Object.keys(errors).length) return false;
@@ -213,7 +223,7 @@ export function CampaignCreatePage() {
         description: description || undefined,
         campaignType: "outreach",
         timezone,
-        sendingAccountId,
+        ...(sendingAccountId ? { sendingAccountId } : {}),
       };
       if (campaignId) {
         await campaignService.update(campaignId, payload);
@@ -276,24 +286,6 @@ export function CampaignCreatePage() {
     }
   };
 
-  const savePersonalization = async (): Promise<boolean> => {
-    if (!campaignId) return false;
-    setIsSaving(true);
-    setStepError(null);
-    try {
-      await campaignService.update(campaignId, {
-        aiPersonalizationEnabled: aiEnabled,
-        aiPersonalizationDepth: aiDepth,
-      });
-      return true;
-    } catch (err: any) {
-      setStepError(err?.data?.error || "Failed to save personalization settings.");
-      return false;
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const saveSchedule = async (): Promise<boolean> => {
     if (!campaignId) return false;
     if (days.length === 0) {
@@ -304,6 +296,13 @@ export function CampaignCreatePage() {
     if (Number.isNaN(sh) || Number.isNaN(eh) || sh < 0 || sh > 23 || eh < 1 || eh > 24 || sh >= eh) {
       setStepError("The sending window must have start before end (0-23h).");
       return false;
+    }
+    if (startAt && endAt) {
+      const s = new Date(startAt), e = new Date(endAt);
+      if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime()) && e <= s) {
+        setStepError("End date must be after the start date (or leave it empty for no end).");
+        return false;
+      }
     }
     setIsSaving(true);
     setStepError(null);
@@ -317,6 +316,7 @@ export function CampaignCreatePage() {
         minDelayMinutes: minDelay ? parseInt(minDelay, 10) : 0,
         maxDelayMinutes: maxDelay ? parseInt(maxDelay, 10) : 0,
         scheduledStartAt: startAt ? new Date(startAt).toISOString() : undefined,
+        scheduledEndAt: endAt ? new Date(endAt).toISOString() : null,
       });
       return true;
     } catch (err: any) {
@@ -339,13 +339,24 @@ export function CampaignCreatePage() {
       if (!(await saveSequence())) return;
       setStep(4);
     } else if (step === 4) {
-      if (!(await savePersonalization())) return;
+      if (!(await saveSchedule())) return;
       setStep(5);
     } else if (step === 5) {
-      if (!(await saveSchedule())) return;
+      if (campaignId) {
+        try {
+          const validation = await campaignSendingPoolService.validate(campaignId);
+          if (!validation.ok) {
+            const msg = validation.issues?.[0] || "Sending accounts are not ready to launch.";
+            setStepError(msg);
+            toast.error(msg);
+            return;
+          }
+        } catch (err: any) {
+          setStepError(err?.data?.error || "Could not validate the sending account pool.");
+          return;
+        }
+      }
       setStep(6);
-    } else if (step === 6) {
-      setStep(7);
     }
   };
 
@@ -377,77 +388,19 @@ export function CampaignCreatePage() {
 
   // ---- Sequence helpers ----
 
-  // ---- Personalization helpers ----
-  const generatePreview = async () => {
-    if (!campaignId) return;
-    setPreviewBusy(true);
-    setAiError(null);
-    try {
-      const res = await campaignService.preview(campaignId, { stepId: steps[0]?.key });
-      setPreview({ subject: res.data.subject, text: res.data.text });
-    } catch (err: any) {
-      setAiError(err?.data?.error || "Preview failed.");
-    } finally {
-      setPreviewBusy(false);
-    }
-  };
-
-  const generateAi = async () => {
-    if (!campaignId) return;
-    setAiBusy(true);
-    setAiError(null);
-    setAiText(null);
-    try {
-      const res = await campaignService.personalize(campaignId, { stepId: steps[0]?.key, depth: aiDepth });
-      setAiText(res.data.personalizedBody);
-    } catch (err: any) {
-      if (err?.status === 501 || err?.data?.code === "AI_NOT_CONFIGURED") {
-        setAiError("AI is not configured on the backend (KIMI_API_KEY missing). Personalization stays manual.");
-      } else {
-        setAiError(err?.data?.error || "AI generation failed.");
-      }
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
-  const acceptAi = async () => {
-    if (!aiText || !campaignId) return;
-    // Accept = apply the AI version to email 1 (variant A when the step uses
-    // variants) and persist the full sequence, variants included.
-    setSteps((prev) => prev.map((s, i) => {
-      if (i !== 0) return s;
-      if (s.variants.length) {
-        return { ...s, variants: s.variants.map((v, vi) => (vi === 0 ? { ...v, bodyHtml: aiText } : v)) };
-      }
-      return { ...s, bodyTemplate: aiText };
-    }));
-    setAiText(null);
-    setIsSaving(true);
-    try {
-      const payload = {
-        name: "Outreach v1",
-        steps: buildSequencePayload(
-          steps.map((s, i) => {
-            if (i !== 0) return s;
-            if (s.variants.length) {
-              return { ...s, variants: s.variants.map((v, vi) => (vi === 0 ? { ...v, bodyHtml: aiText } : v)) };
-            }
-            return { ...s, bodyTemplate: aiText };
-          }),
-        ),
-      };
-      if (sequenceId) await campaignService.updateSequence(campaignId, sequenceId, payload);
-      else {
-        const res = await campaignService.createSequence(campaignId, payload);
-        setSequenceId(res.data.id);
-      }
-    } catch (err: any) {
-      setAiError(err?.data?.error || "Failed to apply the AI version.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
+  // PROMPT 9.1 — live pool summary + validation for the Review step (§71).
+  // Hooks must run before the booting early-return below.
+  const [poolReview, setPoolReview] = useState<PoolAccount[] | null>(null);
+  const [poolValidation, setPoolValidation] = useState<PoolValidation | null>(null);
+  useEffect(() => {
+    if (step !== 6 || !campaignId) return;
+    void campaignSendingPoolService.list(campaignId)
+      .then((r) => setPoolReview(r.data))
+      .catch(() => setPoolReview([]));
+    void campaignSendingPoolService.validate(campaignId)
+      .then(setPoolValidation)
+      .catch(() => setPoolValidation(null));
+  }, [step, campaignId]);
 
   if (booting) {
     return (
@@ -456,8 +409,6 @@ export function CampaignCreatePage() {
       </div>
     );
   }
-
-  const selectedAccount = accounts.find((a) => a.id === sendingAccountId);
 
   // The sequence step is a 3-pane workspace (steps rail | editor | preview) and
   // needs the full content width — the other steps stay in the narrow wizard.
@@ -537,24 +488,10 @@ export function CampaignCreatePage() {
               <textarea className={inputCls()} rows={2} value={description} placeholder="What is this campaign for?"
                 onChange={(e) => setDescription(e.target.value)} />
             </Field>
-            <Field label="Sending account" required error={detailErrors.sendingAccountId}>
-              {accounts.length === 0 ? (
-                <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  No sending accounts yet.{" "}
-                  <Link to="/settings/email-sending" className="font-medium underline">Add your SMTP server first →</Link>
-                </div>
-              ) : (
-                <select className={inputCls(detailErrors.sendingAccountId)} value={sendingAccountId}
-                  onChange={(e) => setSendingAccountId(e.target.value)}>
-                  <option value="">Select an account…</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id} disabled={!a.isEnabled}>
-                      {a.name} — {a.fromEmail}{!a.isEnabled ? " (disabled)" : ""}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
+            <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+              Sending accounts are configured on <span className="font-medium text-slate-700">step 5 (Sending Accounts)</span> —
+              this campaign can send through a pool of SMTP accounts with rotation and per-account limits.
+            </div>
             <Field label="Timezone" required error={detailErrors.timezone}>
               <select className={inputCls()} value={timezone} onChange={(e) => setTimezone(e.target.value)}>
                 {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
@@ -581,131 +518,138 @@ export function CampaignCreatePage() {
         {/* ---------------- STEP 3: SEQUENCE (visual builder) ---------------- */}
         {/* Rendered full-width above; the white card wrapper is skipped. */}
 
-        {/* ---------------- STEP 4: PERSONALIZATION ---------------- */}
+        {/* ---------------- STEP 4: SCHEDULE ---------------- */}
         {step === 4 && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900">AI personalization</h2>
-            <label className="flex items-center gap-3 text-sm text-slate-700">
-              <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)}
-                className="w-4 h-4 accent-[rgb(var(--primary))]" />
-              Enable AI personalization
-            </label>
-            {aiEnabled && (
-              <Field label="Personalization depth">
-                <select className={inputCls()} value={aiDepth} onChange={(e) => setAiDepth(e.target.value)}>
-                  <option value="light">Light — greeting only</option>
-                  <option value="standard">Standard — opening line</option>
-                  <option value="deep">Deep — opening paragraph</option>
-                </select>
-              </Field>
-            )}
-            <div className="rounded-lg border border-slate-200 p-3 text-xs text-slate-500">
-              The AI may only use verified recipient data (name, company, job title, email). It never invents company facts, funding, customers or achievements. If data is missing, the template stays close to the original.
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Schedule</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Pick a preset, or set a custom sending window. Enforced server-side, re-checked before every email.</p>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={generatePreview} disabled={previewBusy}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50">
-                {previewBusy ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />}
-                Template preview
-              </button>
-              {aiEnabled && (
-                <button type="button" onClick={generateAi} disabled={aiBusy}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 disabled:opacity-50">
-                  {aiBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                  Generate AI version
-                </button>
-              )}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" role="radiogroup" aria-label="Schedule preset">
+              {([
+                { id: "anytime", title: "Any time (24/7)", hint: "Send around the clock, every day" },
+                { id: "office", title: "Office hours", hint: "Mon–Fri · 09:00–17:00" },
+                { id: "custom", title: "Custom", hint: "Your own days, hours and dates" },
+              ] as const).map((p) => {
+                const on = preset === p.id;
+                return (
+                  <button key={p.id} type="button" role="radio" aria-checked={on}
+                    onClick={() => {
+                      setPreset(p.id);
+                      if (p.id === "anytime") { setDays([1, 2, 3, 4, 5, 6, 7]); setStartHour("0"); setEndHour("24"); }
+                      if (p.id === "office") { setDays([1, 2, 3, 4, 5]); setStartHour("9"); setEndHour("17"); }
+                    }}
+                    className={`text-left rounded-xl border px-4 py-3 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/30 ${
+                      on ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-slate-200 hover:border-slate-300 bg-white"
+                    }`}>
+                    <span className="block text-sm font-semibold text-slate-900">{p.title}</span>
+                    <span className="block text-[11px] text-slate-500 mt-0.5">{p.hint}</span>
+                  </button>
+                );
+              })}
             </div>
-
-            {aiError && (
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert">{aiError}</p>
-            )}
-            {preview && (
-              <div className="rounded-lg border border-slate-200 p-3">
-                <div className="text-xs text-slate-400 uppercase font-medium mb-1">Template preview (real substitution)</div>
-                <div className="text-sm font-medium text-slate-800">{preview.subject}</div>
-                <pre className="whitespace-pre-wrap text-sm text-slate-700 mt-1 font-sans">{preview.text}</pre>
+            <details className="group" open={preset === "custom"}>
+              <summary className="cursor-pointer select-none text-xs font-semibold text-slate-500 uppercase tracking-wide hover:text-slate-700 flex items-center gap-1.5">
+                <ChevronRight size={12} className="transition-transform group-open:rotate-90" aria-hidden /> Advanced — days, hours, dates &amp; limits
+              </summary>
+              <div className="mt-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <Field label="Start date & time">
+                    <input type="datetime-local" className={inputCls()} value={startAt}
+                      onChange={(e) => setStartAt(e.target.value)} />
+                  </Field>
+                  <Field label="End date & time (optional)">
+                    <input type="datetime-local" className={inputCls()} value={endAt}
+                      onChange={(e) => setEndAt(e.target.value)} />
+                  </Field>
+                </div>
+                <Field label="Timezone">
+                  <input className={inputCls()} value={timezone} disabled />
+                </Field>
+                <Field label="Sending days">
+                  <div className="flex flex-wrap gap-2">
+                    {DAYS.map((d) => {
+                      const on = days.includes(d.value);
+                      return (
+                        <button key={d.value} type="button"
+                          aria-pressed={on}
+                          onClick={() => setDays((p) => on ? p.filter((x) => x !== d.value) : [...p, d.value].sort())}
+                          className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${
+                            on ? "bg-primary text-white border-primary" : "bg-white text-slate-500 border-slate-300"
+                          }`}>
+                          {d.label} {on ? "✓" : ""}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Field>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <Field label="Start hour (0-23)">
+                    <input type="number" min={0} max={23} className={inputCls()} value={startHour} onChange={(e) => setStartHour(e.target.value)} />
+                  </Field>
+                  <Field label="End hour (1-24)">
+                    <input type="number" min={1} max={24} className={inputCls()} value={endHour} onChange={(e) => setEndHour(e.target.value)} />
+                  </Field>
+                  <Field label="Daily campaign limit">
+                    <input type="number" min={1} className={inputCls()} value={dailyLimit} onChange={(e) => setDailyLimit(e.target.value)} />
+                  </Field>
+                  <Field label="Hourly limit">
+                    <input type="number" min={1} className={inputCls()} value={hourlyLimit} onChange={(e) => setHourlyLimit(e.target.value)} />
+                  </Field>
+                  <Field label="Min delay (min)">
+                    <input type="number" min={0} className={inputCls()} value={minDelay} onChange={(e) => setMinDelay(e.target.value)} />
+                  </Field>
+                  <Field label="Max delay (min)">
+                    <input type="number" min={0} className={inputCls()} value={maxDelay} onChange={(e) => setMaxDelay(e.target.value)} />
+                  </Field>
+                </div>
+                <p className="text-xs text-slate-500">
+                  All scheduling is enforced server-side: the send worker re-checks days, window and limits before every email.
+                  Instantly's guidance applies: N selected accounts × 30/day (20/day for AirMail-style caps) — account limits stay authoritative.
+                </p>
               </div>
-            )}
-            {aiText && (
-              <div className="rounded-lg border border-violet-200 bg-violet-50/40 p-3">
-                <div className="text-xs text-violet-500 uppercase font-medium mb-1">AI version</div>
-                <pre className="whitespace-pre-wrap text-sm text-slate-800 font-sans">{aiText}</pre>
-                <button type="button" onClick={acceptAi} disabled={isSaving}
-                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
-                  <CheckCircle2 size={13} /> Accept into Email 1
-                </button>
-              </div>
-            )}
+            </details>
           </div>
         )}
 
-        {/* ---------------- STEP 5: SCHEDULE ---------------- */}
-        {step === 5 && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900">Schedule</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Start date & time" >
-                <input type="datetime-local" className={inputCls()} value={startAt}
-                  onChange={(e) => setStartAt(e.target.value)} />
-              </Field>
-              <Field label="Timezone">
-                <input className={inputCls()} value={timezone} disabled />
-              </Field>
-            </div>
-            <Field label="Sending days">
-              <div className="flex flex-wrap gap-2">
-                {DAYS.map((d) => {
-                  const on = days.includes(d.value);
-                  return (
-                    <button key={d.value} type="button"
-                      aria-pressed={on}
-                      onClick={() => setDays((p) => on ? p.filter((x) => x !== d.value) : [...p, d.value].sort())}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${
-                        on ? "bg-primary text-white border-primary" : "bg-white text-slate-500 border-slate-300"
-                      }`}>
-                      {d.label} {on ? "✓" : ""}
-                    </button>
-                  );
-                })}
-              </div>
-            </Field>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <Field label="Start hour (0-23)">
-                <input type="number" min={0} max={23} className={inputCls()} value={startHour} onChange={(e) => setStartHour(e.target.value)} />
-              </Field>
-              <Field label="End hour (1-24)">
-                <input type="number" min={1} max={24} className={inputCls()} value={endHour} onChange={(e) => setEndHour(e.target.value)} />
-              </Field>
-              <Field label="Daily limit">
-                <input type="number" min={1} className={inputCls()} value={dailyLimit} onChange={(e) => setDailyLimit(e.target.value)} />
-              </Field>
-              <Field label="Hourly limit">
-                <input type="number" min={1} className={inputCls()} value={hourlyLimit} onChange={(e) => setHourlyLimit(e.target.value)} />
-              </Field>
-              <Field label="Min delay (min)">
-                <input type="number" min={0} className={inputCls()} value={minDelay} onChange={(e) => setMinDelay(e.target.value)} />
-              </Field>
-              <Field label="Max delay (min)">
-                <input type="number" min={0} className={inputCls()} value={maxDelay} onChange={(e) => setMaxDelay(e.target.value)} />
-              </Field>
-            </div>
-            <p className="text-xs text-slate-500">
-              All scheduling is enforced server-side: the send worker re-checks days, window and limits before every email.
-            </p>
+        {/* ---------------- STEP 5: SENDING ACCOUNTS (pool) ---------------- */}
+        {step === 5 && campaignId && <SendingAccountsSection campaignId={campaignId} />}
+        {step === 5 && !campaignId && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Fill in the campaign details (step 1) to configure sending accounts.
           </div>
         )}
 
-        {/* ---------------- STEP 6: REVIEW ---------------- */}
+        {/* ---------------- STEP 6: REVIEW & LAUNCH ---------------- */}
         {step === 6 && (
           <div className="space-y-5">
-            <h2 className="text-lg font-semibold text-slate-900">Review</h2>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Review &amp; launch</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  The backend re-validates audience, pool, sequence, schedule and limits at launch.
+                </p>
+              </div>
+              <button
+                onClick={launch}
+                disabled={launchBusy || Boolean(launchResult)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-primary/40"
+              >
+                {launchBusy ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
+                {launchBusy ? "Launching…" : "Launch campaign"}
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <section className="border border-slate-200 rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Campaign</h3>
                 <ReviewRow label="Name" value={name} />
-                <ReviewRow label="Sending account" value={selectedAccount ? `${selectedAccount.name} (${selectedAccount.fromEmail})` : "—"} />
+                <ReviewRow label="Sending accounts" value={
+                  poolReview
+                    ? poolReview.length === 0
+                      ? "None — add at least one on step 5"
+                      : poolReview.map((p) => `${p.email} (${p.weight}%)`).join(", ")
+                    : "…"
+                } />
                 <ReviewRow label="Timezone" value={timezone} />
               </section>
               <section className="border border-slate-200 rounded-xl p-4">
@@ -721,22 +665,59 @@ export function CampaignCreatePage() {
                 ))}
               </section>
               <section className="border border-slate-200 rounded-xl p-4">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Sending capacity</h3>
+                <ReviewRow label="Accounts in pool" value={poolReview ? String(poolReview.length) : "…"} />
+                <ReviewRow label="Configured distribution" value={
+                  poolReview && poolReview.length
+                    ? poolReview.map((p) => `${p.email.split("@")[0]} ${p.weight}%`).join(" · ")
+                    : "—"
+                } />
+                <ReviewRow label="Daily capacity (account limits)" value={(() => {
+                  if (!poolReview) return "…";
+                  const enabled = poolReview.filter((p) => p.isEnabled);
+                  // Any uncapped account makes the pool effectively unlimited.
+                  if (enabled.some((p) => p.dailyLimit == null)) return "Unlimited (no cap on at least one account)";
+                  return `${enabled.reduce((sum, p) => sum + (p.dailyLimit ?? 0), 0)}/day`;
+                })()} />
+                <ReviewRow label="Remaining today" value={(() => {
+                  if (!poolReview) return "…";
+                  const enabled = poolReview.filter((p) => p.isEnabled);
+                  if (enabled.some((p) => p.remainingToday == null)) return "Unlimited";
+                  return `${enabled.reduce((sum, p) => sum + (p.remainingToday ?? 0), 0)} emails`;
+                })()} />
+                <ReviewRow label="Estimated sending duration" value={(() => {
+                  if (!poolReview) return "…";
+                  const leads = counts?.eligible ?? enrolled.length;
+                  const enabled = poolReview.filter((p) => p.isEnabled);
+                  if (!leads) return "—";
+                  if (enabled.some((p) => p.dailyLimit == null)) return `${leads} leads — capacity is uncapped; duration set by schedule window`;
+                  const capacity = enabled.reduce((sum, p) => sum + (p.dailyLimit ?? 0), 0);
+                  if (!capacity) return "—";
+                  const days = Math.ceil(leads / capacity);
+                  return `~${days} sending day${days === 1 ? "" : "s"} for ${leads} leads`;
+                })()} />
+              </section>
+              <section className="border border-slate-200 rounded-xl p-4 md:col-span-2">
                 <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Schedule</h3>
                 <ReviewRow label="Start" value={startAt ? new Date(startAt).toLocaleString() : "Immediately"} />
+                <ReviewRow label="End" value={endAt ? new Date(endAt).toLocaleString() : "No end date"} />
                 <ReviewRow label="Days" value={days.map((d) => DAYS[d - 1]?.label).filter(Boolean).join(", ")} />
                 <ReviewRow label="Window" value={`${startHour}:00 – ${endHour}:00`} />
-                <ReviewRow label="Limits" value={`${dailyLimit || "—"}/day · ${hourlyLimit || "—"}/hour`} />
+                <ReviewRow label="Limits" value={`${dailyLimit || "—"}/day · ${hourlyLimit || "—"}/hour (campaign caps; account limits stay authoritative)`} />
               </section>
             </div>
 
             <section className="border border-slate-200 rounded-xl p-4">
               <h3 className="text-xs font-semibold text-slate-400 uppercase mb-2">Compliance</h3>
               <ul className="space-y-2 text-sm">
-                <ComplianceItem
-                  ok={Boolean(selectedAccount && selectedAccount.isEnabled && selectedAccount.hasPassword)}
-                  label="SMTP account enabled with stored credentials"
-                />
-                <ComplianceItem ok={Boolean(selectedAccount?.fromEmail)} label="Sender identity configured" />
+                {(poolValidation?.issues ?? []).length === 0 ? (
+                  <ComplianceItem ok label="Sending account pool valid (enabled accounts, credentials stored, distribution = 100%)" />
+                ) : (
+                  (poolValidation?.issues ?? []).map((issue, i) => (
+                    <ComplianceItem key={i} ok={false} label={issue} />
+                  ))
+                )}
+                <ComplianceItem ok label="Account identities resolve per email — from address, reply-to and signature come from the account actually sending" />
                 <ComplianceItem ok={(counts?.eligible ?? 0) > 0} label="At least one eligible recipient" />
                 <ComplianceItem ok={(counts?.suppressed ?? 0) === 0 || true}
                   label={`${counts?.suppressed ?? 0} suppressed recipient(s) will be skipped`} neutral />
@@ -749,26 +730,6 @@ export function CampaignCreatePage() {
           </div>
         )}
 
-        {/* ---------------- STEP 7: LAUNCH ---------------- */}
-        {step === 7 && (
-          <div className="space-y-5 text-center py-6">
-            <div className="w-14 h-14 mx-auto rounded-full bg-primary/10 text-primary flex items-center justify-center">
-              <Rocket size={26} aria-hidden />
-            </div>
-            <h2 className="text-lg font-semibold text-slate-900">Ready to launch</h2>
-            <p className="text-sm text-slate-500 max-w-md mx-auto">
-              The backend validates state, audience, SMTP account, sender identity, sequence, schedule, suppression and limits — then queues the first emails. The worker sends them inside your schedule window.
-            </p>
-            <button
-              onClick={launch}
-              disabled={launchBusy || Boolean(launchResult)}
-              className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-primary/40"
-            >
-              {launchBusy ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />}
-              {launchBusy ? "Launching…" : "Launch Campaign"}
-            </button>
-          </div>
-        )}
       </div>
       )}
 
@@ -778,7 +739,7 @@ export function CampaignCreatePage() {
           className="inline-flex items-center gap-1 px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40">
           <ChevronLeft size={15} /> Back
         </button>
-        {step < 7 ? (
+        {step < STEPS.length ? (
           <button onClick={next} disabled={isSaving || launchBusy}
             className="inline-flex items-center gap-1 px-5 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-primary/40">
             {isSaving && <Loader2 size={14} className="animate-spin" />}

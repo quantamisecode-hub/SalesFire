@@ -79,6 +79,20 @@ CampaignLead.init({
     type: DataTypes.DATE,
     field: 'bounced_at',
   },
+  // PROMPT 9.1 — recipient-level sending-account assignment (not campaign-global).
+  sendingAccountId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    field: 'sending_account_id',
+  },
+  assignmentMethod: {
+    type: DataTypes.STRING(20),
+    field: 'assignment_method', // weighted | round_robin | availability_based | sticky | manual
+  },
+  assignedAt: {
+    type: DataTypes.DATE,
+    field: 'assigned_at',
+  },
   currentStepId: {
     type: DataTypes.UUID,
     allowNull: true,

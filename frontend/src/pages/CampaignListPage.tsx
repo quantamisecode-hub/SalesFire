@@ -233,17 +233,17 @@ export function CampaignListPage() {
                   return (
                     <tr key={c.id} className="hover:bg-slate-50/60">
                       <td className="px-4 py-3">
-                        <Link to={`/campaigns/${c.id}`} className="font-medium text-slate-900 hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/40 rounded">
+                        <Link to={`/campaigns/${c.id}`} title={c.name} className="font-medium text-slate-900 hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary/40 rounded block max-w-[220px] truncate">
                           {c.name}
                         </Link>
                       </td>
                       <td className="px-4 py-3"><Badge status={c.status} /></td>
-                      <td className="px-4 py-3 text-slate-700">{c.totalLeads ?? 0}</td>
-                      <td className="px-4 py-3 text-slate-700">{c.emailsSent}</td>
-                      <td className="px-4 py-3 text-slate-700">{c.emailsDelivered}</td>
-                      <td className="px-4 py-3 text-slate-700">{c.emailsReplied}</td>
-                      <td className="px-4 py-3 text-slate-700">{bounceRate}%</td>
-                      <td className="px-4 py-3 text-slate-700">{replyRate}%</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{c.totalLeads ?? 0}</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{c.emailsSent}</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{c.emailsDelivered}</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{c.emailsReplied}</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{bounceRate}%</td>
+                      <td className="px-4 py-3 text-slate-700 tabular-nums">{replyRate}%</td>
                       <td className="px-4 py-3 text-xs text-slate-600">
                         {c.scheduledStartAt ? new Date(c.scheduledStartAt).toLocaleDateString() : "—"}
                       </td>

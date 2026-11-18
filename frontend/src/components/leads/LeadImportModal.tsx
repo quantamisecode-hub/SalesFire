@@ -96,7 +96,7 @@ export function LeadImportModal({
     }
     setPhase("validating"); setError(null);
     try {
-      const v = await leadService.validate({ headers: preview.headers, rows: preview.rows, mapping, duplicateStrategy: dupStrategy });
+      const v = await leadService.validate({ headers: preview.headers, rows: preview.rows, mapping, duplicateStrategy: dupStrategy, campaignId: campaignId ?? null });
       setValidation(v);
       setPhase("review");
     } catch (err: any) {
@@ -274,7 +274,10 @@ export function LeadImportModal({
                 <Stat label="Missing emails" value={validation.counts.missingEmail} tone="red" />
                 <Stat label="Duplicates in file" value={validation.counts.duplicateInFile} tone="amber" />
                 <Stat label="Duplicates (existing)" value={validation.counts.duplicateExisting} tone="amber" />
-                <Stat label="Suppressed" value={validation.counts.suppressed} tone="amber" />
+                {campaignId && (
+                  <Stat label="Already enrolled" value={validation.counts.campaignEnrolled ?? 0} tone="amber" />
+                )}
+                <Stat label="Suppressed (blocked)" value={validation.counts.suppressed} tone="amber" />
               </div>
               {validation.errors.length > 0 && (
                 <div className="rounded-lg border border-slate-200 overflow-hidden">

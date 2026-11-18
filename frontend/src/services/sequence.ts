@@ -61,6 +61,18 @@ export const sequenceService = {
     return res.data.steps;
   },
 
+  /** Rewrite ONE email inside the current sequence (neighbours stay as context). */
+  async regenerateStep(payload: {
+    prompt?: string; industry?: string; tone?: string;
+    current: { subject: string; bodyHtml: string };
+    previous?: { subject: string; bodyHtml: string } | null;
+    next?: { subject: string; bodyHtml: string } | null;
+    position: number; totalSteps: number;
+  }): Promise<{ subject: string; bodyHtml: string; subjectPreserved?: boolean }> {
+    const res = await api.post("/ai/regenerate-step", payload);
+    return res.data.step;
+  },
+
   /** AI spintax writer (501 when KIMI_API_KEY is absent). */
   async generateSpintax(text: string): Promise<string> {
     const res = await api.post("/ai/generate-spintax", { text });

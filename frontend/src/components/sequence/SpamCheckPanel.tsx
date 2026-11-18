@@ -40,16 +40,16 @@ export function SpamCheckPanel({ campaignId, getSubject, getBodyHtml }: SpamChec
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 min-w-0 flex-1 sm:max-w-sm">
       <button type="button" onClick={run} disabled={busy || !campaignId}
-        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50">
+        className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap">
         {busy ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Spam check
       </button>
 
       {error && <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2" role="alert">{error}</p>}
 
       {result && (
-        <div className={`rounded-xl border p-3 text-xs space-y-2 ${GRADE_STYLES[result.grade]}`} role="status">
+        <div className={`w-full rounded-xl border p-3 text-xs space-y-2 ${GRADE_STYLES[result.grade]}`} role="status">
           <div className="flex items-center gap-2">
             {result.grade === "poor" || result.grade === "warning"
               ? <ShieldAlert size={14} aria-hidden />

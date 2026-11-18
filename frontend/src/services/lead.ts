@@ -58,7 +58,7 @@ export const leadService = {
       .then((r: any) => r.data);
   },
 
-  async validate(payload: { headers: string[]; rows: unknown[][]; mapping: Record<string, string>; duplicateStrategy: string }): Promise<{ counts: ImportValidationCounts; errors: ImportValidationError[] }> {
+  async validate(payload: { headers: string[]; rows: unknown[][]; mapping: Record<string, string>; duplicateStrategy: string; campaignId?: string | null }): Promise<{ counts: ImportValidationCounts; errors: ImportValidationError[] }> {
     return handle(fetch("/api/v1/leads/import/validate", {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),

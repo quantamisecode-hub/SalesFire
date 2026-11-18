@@ -112,6 +112,25 @@ Campaign.init({
   maxEmailsPerDay: {
     type: DataTypes.INTEGER,
   },
+  // PROMPT 9.1 — sending-account pool strategy.
+  // 'round_robin' | 'weighted' | 'availability_based'
+  accountDistribution: {
+    type: DataTypes.STRING(20),
+    field: 'account_distribution',
+    defaultValue: 'round_robin',
+  },
+  // 'rotate' = pick per email; 'sticky' = keep recipient on one assigned account.
+  accountStickiness: {
+    type: DataTypes.STRING(10),
+    field: 'account_stickiness',
+    defaultValue: 'rotate',
+  },
+  // 'reassign' = fall back to another eligible pooled account; 'pause' = hold the recipient.
+  fallbackPolicy: {
+    type: DataTypes.STRING(20),
+    field: 'fallback_policy',
+    defaultValue: 'reassign',
+  },
   maxEmailsPerLead: {
     type: DataTypes.INTEGER,
     defaultValue: 10,

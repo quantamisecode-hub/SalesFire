@@ -30,32 +30,47 @@ async function buildTransport(account) {
   });
 }
 
-// Classify SMTP errors: 'auth' | 'dns' | 'tls' | 'timeout' | 'permanent' | 'transient'
+// Classify SMTP errors into PROMPT 9.1 failure classes. Never echoes raw
+// SMTP responses (which may contain credentials or internal hostnames).
+// Classes: AUTHENTICATION_ERROR | CONNECTION_ERROR | TLS_ERROR | RATE_LIMIT
+//        | TEMPORARY_FAILURE | PERMANENT_FAILURE | MAILBOX_UNAVAILABLE | UNKNOWN
 function classifyError(err) {
   const code = err?.code || '';
   const cmd = err?.command || '';
-  const responseCode = err?.responseCode || 0;
+  const responseCode = Number(err?.responseCode || 0);
   const msg = String(err?.message || '').toLowerCase();
 
   if (code === 'EAUTH' || cmd === 'AUTH' || responseCode === 535 || responseCode === 530) {
-    return { class: 'auth', message: 'SMTP authentication failed.' };
+    return { class: 'AUTHENTICATION_ERROR', message: 'SMTP authentication failed.' };
   }
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    return { class: 'dns', message: 'SMTP host not found.' };
+  if (responseCode === 429 || responseCode === 421) {
+    return { class: 'RATE_LIMIT', message: 'SMTP rate limit reached.' };
   }
-  if (code === 'ECONNREFUSED') {
-    return { class: 'transient', message: 'SMTP connection refused.' };
+  if (responseCode === 450 || responseCode === 451 || responseCode === 452) {
+    return { class: 'TEMPORARY_FAILURE', message: 'SMTP temporary failure; recipient may be temporarily unavailable.' };
   }
-  if (code === 'ETIMEDOUT' || code === 'ESOCKET' || msg.includes('timeout')) {
-    return { class: 'timeout', message: 'SMTP connection timed out.' };
-  }
-  if (msg.includes('certificate') || msg.includes('tls') || code === 'EPROTO') {
-    return { class: 'tls', message: 'SMTP TLS negotiation failed.' };
+  if ([550, 551, 553].includes(responseCode) && /mailbox|user|recipient/.test(msg)) {
+    return { class: 'MAILBOX_UNAVAILABLE', message: 'Recipient mailbox unavailable.' };
   }
   if (responseCode >= 500) {
-    return { class: 'permanent', message: 'SMTP rejected the message permanently.' };
+    return { class: 'PERMANENT_FAILURE', message: 'SMTP rejected the message permanently.' };
   }
-  return { class: 'transient', message: 'SMTP delivery failed.' };
+  if (responseCode >= 400) {
+    return { class: 'TEMPORARY_FAILURE', message: 'SMTP temporary failure.' };
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return { class: 'CONNECTION_ERROR', message: 'SMTP host not found.' };
+  }
+  if (code === 'ECONNREFUSED') {
+    return { class: 'CONNECTION_ERROR', message: 'SMTP connection refused.' };
+  }
+  if (code === 'ETIMEDOUT' || code === 'ESOCKET' || msg.includes('timeout')) {
+    return { class: 'CONNECTION_ERROR', message: 'SMTP connection timed out.' };
+  }
+  if (msg.includes('certificate') || msg.includes('tls') || code === 'EPROTO') {
+    return { class: 'TLS_ERROR', message: 'SMTP TLS negotiation failed.' };
+  }
+  return { class: 'UNKNOWN', message: 'SMTP delivery failed.' };
 }
 
 // Verify connectivity/credentials. Returns { ok, class?, message, latencyMs }.

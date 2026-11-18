@@ -61,6 +61,11 @@ const TONE_BY_STATUS: Record<string, string> = {
   at_risk: "bg-amber-50 text-amber-700 border border-amber-200",
   poor: "bg-red-50 text-red-700 border border-red-200",
   not_enough_data: "bg-slate-100 text-slate-600 border border-slate-200",
+  healthy: "bg-emerald-50 text-emerald-700 border border-emerald-200",
+  warning: "bg-amber-50 text-amber-700 border border-amber-200",
+  critical: "bg-red-50 text-red-700 border border-red-200",
+  warming: "bg-sky-50 text-sky-700 border border-sky-200",
+  not_started: "bg-slate-100 text-slate-600 border border-slate-200",
 };
 
 // Events sometimes arrive upper-case (SENT, BOUNCED) — normalize before lookup.

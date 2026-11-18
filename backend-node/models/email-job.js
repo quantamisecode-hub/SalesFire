@@ -85,6 +85,17 @@ EmailJob.init({
     type: DataTypes.DATE,
     field: 'sent_at',
   },
+  // PROMPT 9.1 — which account this job will send (or sent) through.
+  sendingAccountId: {
+    type: DataTypes.UUID,
+    field: 'sending_account_id',
+  },
+  // PROMPT 9.1 — idempotency: unique per (org, campaign, recipient, step).
+  idempotencyKey: {
+    type: DataTypes.STRING(255),
+    field: 'idempotency_key',
+    unique: true,
+  },
 }, {
   sequelize,
   tableName: 'email_jobs',

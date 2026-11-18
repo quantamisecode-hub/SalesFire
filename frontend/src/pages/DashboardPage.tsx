@@ -35,7 +35,7 @@ function KpiCard({
           <Icon size={16} />
         </div>
         <div className="min-w-0">
-          <div className="truncate text-xs text-slate-500">{label}</div>
+          <div className="truncate text-xs text-slate-500" title={label}>{label}</div>
           <div className="text-lg font-semibold text-slate-900">{value}</div>
         </div>
       </div>
@@ -105,7 +105,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <KpiCard
           icon={Megaphone}
-          label="Total Campaigns"
+          label="Campaigns"
           value={campaigns.length}
           tint="bg-primary-50 text-primary-600"
         />
@@ -123,13 +123,13 @@ export function DashboardPage() {
         />
         <KpiCard
           icon={Users}
-          label="Leads Enrolled"
+          label="Leads"
           value={totals.leads}
           tint="bg-violet-50 text-violet-600"
         />
         <KpiCard
           icon={Mail}
-          label="Emails Sent"
+          label="Emails sent"
           value={totals.sent}
           tint="bg-sky-50 text-sky-600"
         />

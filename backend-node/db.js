@@ -43,6 +43,9 @@ if (config.databaseUrl && config.databaseUrl.includes('mysql')) {
   sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: sqlitePath,
+    // SQLite serializes writes at the file level; multiple pooled connections
+    // just produce SQLITE_BUSY under concurrent reservations (Prompt 9.1).
+    pool: { max: 1, min: 0, acquire: 30000, idle: 10000 },
     logging: config.environment !== 'production' ? console.log : false,
   });
   dbType = 'sqlite3';

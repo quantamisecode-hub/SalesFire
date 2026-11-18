@@ -168,7 +168,7 @@ function validEmail(v) {
   return EMAIL_RE.test(e) ? e : null;
 }
 
-async function validateImport(rows, mapping, duplicateStrategy, organizationId) {
+async function validateImport(rows, mapping, duplicateStrategy, organizationId, campaignId) {
   // Resolve the email column index — required (§20).
   const emailIdx = Object.keys(mapping).find((i) => mapping[i] === EMAIL_FIELD);
   if (emailIdx === undefined) {
@@ -177,7 +177,7 @@ async function validateImport(rows, mapping, duplicateStrategy, organizationId) 
     throw e;
   }
 
-  const counts = { total: rows.length, valid: 0, invalidEmail: 0, missingEmail: 0, duplicateInFile: 0, duplicateExisting: 0, suppressed: 0 };
+  const counts = { total: rows.length, valid: 0, invalidEmail: 0, missingEmail: 0, duplicateInFile: 0, duplicateExisting: 0, campaignEnrolled: 0, suppressed: 0 };
   const seen = new Set();
   const candidates = []; // { rowIndex, email, data }
   const rowErrors = [];
@@ -208,6 +208,7 @@ async function validateImport(rows, mapping, duplicateStrategy, organizationId) 
   const emails = candidates.map((c) => c.email);
   let existing = new Set();
   let suppressed = new Set();
+  let enrolled = new Set();
   if (emails.length) {
     const chunk = 500;
     for (let i = 0; i < emails.length; i += chunk) {
@@ -216,6 +217,15 @@ async function validateImport(rows, mapping, duplicateStrategy, organizationId) 
       found.forEach((l) => existing.add(l.email));
       const sup = await Suppression.findAll({ where: { organizationId, email: { [Op.in]: slice } }, attributes: ['email'] });
       sup.forEach((s) => suppressed.add(s.email));
+      // When enrolling into a campaign: leads already enrolled in THIS campaign
+      // are excluded — duplicates everywhere else are still counted as such.
+      if (campaignId) {
+        const inCampaign = await models.CampaignLead.findAll({
+          where: { campaignId, organizationId, email: { [Op.in]: slice } },
+          attributes: ['email'],
+        });
+        inCampaign.forEach((l) => enrolled.add(l.email));
+      }
     }
   }
 
@@ -224,6 +234,11 @@ async function validateImport(rows, mapping, duplicateStrategy, organizationId) 
     if (suppressed.has(c.email)) {
       counts.suppressed++;
       rowErrors.push({ row: c.rowIndex, email: c.email, reason: 'Suppressed (unsubscribe / bounced / blocked)' });
+      continue;
+    }
+    if (enrolled.has(c.email)) {
+      counts.campaignEnrolled++;
+      rowErrors.push({ row: c.rowIndex, email: c.email, reason: 'Already enrolled in this campaign' });
       continue;
     }
     if (existing.has(c.email)) {
@@ -277,7 +292,7 @@ async function processImportJob(jobId) {
 
   try {
     const mapping = job.mapping;
-    const { counts, finalRows, rowErrors } = await validateImport(job.rows, mapping, job.duplicateStrategy, job.organizationId);
+    const { counts, finalRows, rowErrors } = await validateImport(job.rows, mapping, job.duplicateStrategy, job.organizationId, job.campaignId || null);
     await job.update({
       totalRows: counts.total,
       skipped: counts.total - counts.valid,

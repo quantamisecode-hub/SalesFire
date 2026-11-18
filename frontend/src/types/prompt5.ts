@@ -26,7 +26,7 @@ export interface Campaign {
   signatureMode?: "inherit" | "custom" | "none";
   signatureId?: string | null;
   scheduledStartAt?: string;
-  scheduledEndAt?: string;
+  scheduledEndAt?: string | null;
   startedAt?: string;
   completedAt?: string;
   pausedAt?: string;
@@ -73,7 +73,7 @@ export interface CampaignCreatePayload {
   sendBetweenEndHour?: number;
   sendDaysOfWeek?: number[];
   scheduledStartAt?: string;
-  scheduledEndAt?: string;
+  scheduledEndAt?: string | null;
   timezone: string;
   aiProvider: string;
   aiPersonalizationEnabled: boolean;

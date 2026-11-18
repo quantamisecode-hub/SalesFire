@@ -337,7 +337,7 @@ router.get('/:id/analytics', authenticate, checkOrgMembership, async (req, res) 
     // Authoritative counts from the append-only event log.
     const events = await models.EmailEvent.findAll({
       where: { campaignId: campaign.id },
-      attributes: ['eventType', 'metadata'],
+      attributes: ['eventType', 'metadata', 'sendingAccountId'],
     });
 
     let queued = 0, sent = 0, failed = 0, bounced = 0, softFailed = 0, unsubscribed = 0, replied = 0;
@@ -350,7 +350,7 @@ router.get('/:id/analytics', authenticate, checkOrgMembership, async (req, res) 
         case 'FAILED': {
           failed++;
           const klass = ev.metadata?.failureClass;
-          if (klass === 'permanent' || klass === 'auth' || klass === 'dns') bounced++;
+          if (['permanent', 'auth', 'dns', 'PERMANENT_FAILURE', 'AUTHENTICATION_ERROR', 'MAILBOX_UNAVAILABLE'].includes(klass)) bounced++;
           else softFailed++;
           break;
         }
@@ -358,11 +358,43 @@ router.get('/:id/analytics', authenticate, checkOrgMembership, async (req, res) 
       }
     }
 
-    // Recipient-level counters (audience state)
     const totalRecipients = await models.CampaignLead.count({ where: { campaignId: campaign.id } });
     const activeRecipients = await models.CampaignLead.count({
       where: { campaignId: campaign.id, status: { [Op.notIn]: ['unsubscribed', 'bounced', 'suppressed'] } },
     });
+
+    // PROMPT 9.1 §44 — per sending-account breakdown, from real event data.
+    const byAccount = {};
+    for (const ev of events) {
+      const acctId = ev.sendingAccountId || (ev.metadata && ev.metadata.sendingAccountId) || null;
+      if (!acctId) continue;
+      if (!byAccount[acctId]) byAccount[acctId] = { accountId: acctId, sent: 0, replied: 0, bounced: 0, failed: 0 };
+      if (ev.eventType === 'SENT') byAccount[acctId].sent++;
+      else if (ev.eventType === 'REPLIED') byAccount[acctId].replied++;
+      else if (ev.eventType === 'FAILED') {
+        const klass = ev.metadata?.failureClass;
+        if (['permanent', 'PERMANENT_FAILURE', 'AUTHENTICATION_ERROR', 'MAILBOX_UNAVAILABLE'].includes(klass)) byAccount[acctId].bounced++;
+        else byAccount[acctId].failed++;
+      }
+    }
+    const accountIds = Object.keys(byAccount);
+    let accountBreakdown = [];
+    if (accountIds.length) {
+      const acctRows = await models.SmtpAccount.findAll({
+        where: { id: accountIds, organizationId: campaign.organizationId },
+        attributes: ['id', 'fromEmail', 'fromName'],
+      });
+      const acctMap = new Map(acctRows.map((a) => [a.id, a]));
+      accountBreakdown = accountIds.map((id) => ({
+        accountId: id,
+        email: acctMap.get(id)?.fromEmail || 'unknown',
+        fromName: acctMap.get(id)?.fromName || null,
+        sent: byAccount[id].sent,
+        replied: byAccount[id].replied,
+        bounced: byAccount[id].bounced,
+        failed: byAccount[id].failed,
+      }));
+    }
 
     // With self-hosted SMTP, "delivered" = accepted by the recipient mail server
     // (SENT) minus synchronously-detected hard bounces.
@@ -389,6 +421,7 @@ router.get('/:id/analytics', authenticate, checkOrgMembership, async (req, res) 
         bounceRate: rate(bounced, sent),
         unsubscribeRate: rate(unsubscribed, sent),
         failureRate: rate(failed, sent),
+        accounts: accountBreakdown,
       },
     });
   } catch (error) {
@@ -923,77 +956,9 @@ router.get('/:campaignId/leads', authenticate, checkOrgMembership, async (req, r
 // Sending Account Routes
 // ============================================================================
 
-// POST /api/v1/campaigns/:campaignId/sending-accounts - Create sending account
-router.post('/:campaignId/sending-accounts', authenticate, checkOrgMembership, async (req, res) => {
-  try {
-    // Model fields: emailAddress, displayName, smtpHost, smtpPort, smtpUsername, smtpPassword, status
-    const { emailAddress, displayName, smtpHost, smtpPort, smtpUsername, smtpPassword } = req.body;
-
-    if (!emailAddress || !smtpHost || !smtpPort) {
-      return res.status(422).json({ error: 'emailAddress, smtpHost and smtpPort are required' });
-    }
-
-    const account = await models.CampaignSendingAccount.create({
-      campaignId: req.params.campaignId,
-      organizationId: req.user.org,
-      emailAddress,
-      displayName: displayName || null,
-      smtpHost,
-      smtpPort: parseInt(smtpPort, 10) || 587,
-      smtpUsername: smtpUsername || null,
-      smtpPassword: smtpPassword || null,
-      status: 'active',
-    });
-    
-    res.status(201).json({
-      success: true,
-      data: account,
-    });
-  } catch (error) {
-    console.error('Create sending account error:', error);
-    res.status(500).json({ error: 'Failed to create sending account' });
-  }
-});
-
-// GET /api/v1/campaigns/:campaignId/sending-accounts - List sending accounts
-router.get('/:campaignId/sending-accounts', authenticate, checkOrgMembership, async (req, res) => {
-  try {
-    const accounts = await models.CampaignSendingAccount.findAll({
-      where: { campaignId: req.params.campaignId, organizationId: req.user.org },
-    });
-    
-    res.json({ success: true, data: accounts });
-  } catch (error) {
-    console.error('List sending accounts error:', error);
-    res.status(500).json({ error: 'Failed to list sending accounts' });
-  }
-});
-
-// POST /api/v1/campaigns/:campaignId/sending-accounts/:accountId/test - Test sending account
-router.post('/:campaignId/sending-accounts/:accountId/test', authenticate, checkOrgMembership, async (req, res) => {
-  try {
-    const { smtpHost, smtpPort, smtpUsername, smtpPassword, smtpUseTLS, fromEmail } = req.body;
-    
-    // Test SMTP connection
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpUseTLS ? true : false,
-      auth: smtpUsername && smtpPassword ? { user: smtpUsername, pass: smtpPassword } : {},
-    });
-    
-    await transporter.verify();
-    
-    res.json({
-      success: true,
-      message: 'SMTP connection test successful',
-    });
-  } catch (error) {
-    console.error('Sending account test error:', error);
-    res.status(500).json({ error: 'SMTP connection test failed: ' + error.message });
-  }
-});
+// PROMPT 9.1 — campaign sending-account pool endpoints live in
+// routes/campaign-accounts.js (mounted at /api/v1/campaigns). The legacy
+// plaintext-credential endpoints that used to live here were removed.
 
 // ============================================================================
 // Email Template Routes
@@ -1305,16 +1270,24 @@ router.post('/:id/launch', authenticate, checkOrgMembership, async (req, res) =>
     const withEmail = recipients.filter((r) => r.email && /.+@.+\..+/.test(r.email));
     if (!withEmail.length) problems.push('No eligible recipients with a valid email address.');
 
-    let account = null;
-    if (!campaign.sendingAccountId) {
-      problems.push('No sending account selected.');
+    // PROMPT 9.1 — account pool validation (tenant-scoped, weighted-sum,
+    // password presence, enabled). Falls back to the legacy single account
+    // when no pool exists yet.
+    const poolValidation = await require('../services/campaign-sending-account-service')
+      .validatePoolForLaunch(campaign);
+    if (poolValidation.accountCount === 0) {
+      if (!campaign.sendingAccountId) {
+        problems.push('No sending account selected.');
+      } else {
+        const legacy = await models.SmtpAccount.findOne({
+          where: { id: campaign.sendingAccountId, organizationId: req.user.org },
+        });
+        if (!legacy) problems.push('Selected sending account not found.');
+        else if (!legacy.isEnabled) problems.push('Selected sending account is disabled.');
+        else if (!legacy.fromEmail) problems.push('Sending account has no sender identity (from email).');
+      }
     } else {
-      account = await models.SmtpAccount.findOne({
-        where: { id: campaign.sendingAccountId, organizationId: req.user.org },
-      });
-      if (!account) problems.push('Selected sending account not found.');
-      else if (!account.isEnabled) problems.push('Selected sending account is disabled.');
-      else if (!account.fromEmail) problems.push('Sending account has no sender identity (from email).');
+      for (const issue of poolValidation.issues) problems.push(issue);
     }
 
     if (problems.length) {

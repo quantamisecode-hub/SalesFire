@@ -84,4 +84,19 @@ describe('email-verifier (Prompt 8)', () => {
     const r = await verifier.verifyEmail('mail@no-mx-but-resolves.example', { resolveMx: mxEmpty });
     assert.strictEqual(r.status, 'invalid');
   });
+
+  test('RFC 7505 null MX (".") → domain refuses mail, must be invalid', async () => {
+    const mxNull = async () => [{ exchange: '.', priority: 0 }];
+    const r = await verifier.verifyEmail('someone@nulldns.example', { resolveMx: mxNull });
+    assert.strictEqual(r.status, 'invalid');
+    assert.ok(r.reasons.includes('null_mx_record'), 'null MX must be reported, got: ' + r.reasons.join(','));
+    assert.strictEqual(r.riskScore, 100);
+  });
+
+  test('empty-exchange MX record → treated as no-mail (invalid)', async () => {
+    const mxEmptyExchange = async () => [{ exchange: '', priority: 0 }];
+    const r = await verifier.verifyEmail('someone@emptyexchange.example', { resolveMx: mxEmptyExchange });
+    assert.strictEqual(r.status, 'invalid');
+    assert.ok(r.reasons.includes('null_mx_record'));
+  });
 });

@@ -13,6 +13,7 @@ const { sequelize } = require('../db');
 const models = require('../models');
 const emailService = require('./email');
 const templateRenderer = require('./template-renderer');
+const allocator = require('./sending-account-allocator');
 const { Op } = require('sequelize');
 
 const WORKER_ID = `worker-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
@@ -62,6 +63,9 @@ function buildLeadVars(recipient, lead, account, unsubscribeUrl) {
     company_size: (lead && lead.companySize) || '', companySize: (lead && lead.companySize) || '',
     phone: (lead && lead.phone) || '',
     linkedin: (lead && lead.linkedin) || '',
+    // Imported "Personalization" column — previously validated as a platform
+    // variable but never resolved, leaving a literal {{personalization}} in sends.
+    personalization: (lead && lead.personalization) || '',
   };
   // Custom variables from imported Excel/CSV columns (§18). Slugs were
   // validated at import (^[a-z0-9_]{1,40}$); re-validate defensively — no
@@ -191,14 +195,23 @@ async function queueNextStepForRecipient(campaign, recipient, transaction, sched
     : 0;
   const when = new Date(base.getTime() + delayMs + jitter * 60 * 1000);
 
-  const job = await models.EmailJob.create({
-    organizationId: campaign.organizationId,
-    campaignId: campaign.id,
-    campaignRecipientId: recipient.id,
-    stepId: step.id,
-    status: 'queued',
-    scheduledFor: when,
-  }, { transaction });
+  // PROMPT 9.1 §28 — idempotency: org+campaign+recipient+step uniquely identify
+  // one send attempt. A retry of this enqueue is a no-op, never a duplicate.
+  const idempotencyKey = `${campaign.organizationId}:${campaign.id}:${recipient.id}:${step.id}`;
+  const [job, created] = await models.EmailJob.findOrCreate({
+    where: { idempotencyKey },
+    defaults: {
+      organizationId: campaign.organizationId,
+      campaignId: campaign.id,
+      campaignRecipientId: recipient.id,
+      stepId: step.id,
+      status: 'queued',
+      scheduledFor: when,
+      idempotencyKey,
+    },
+    transaction,
+  });
+  if (!created) return job; // already queued — do not advance counters twice
 
   await recipient.update({
     currentStep: nextIndex + 1,
@@ -236,36 +249,44 @@ async function claimJob(jobId, transaction) {
 }
 
 // ---------------------------------------------------------------------------
-// Limits (daily / hourly) — enforced from sent jobs + events, server-side.
-
-async function withinLimits(campaign, account) {
-  const one = async (sinceExpr) => {
-    const [rows] = await sequelize.query(
-      `SELECT COUNT(*) AS n FROM email_jobs
-        WHERE campaign_id = :campaignId AND status = 'sent' AND sent_at >= ${sinceExpr}`,
-      { replacements: { campaignId: campaign.id }, type: sequelize.QueryTypes.SELECT }
-    );
-    return Number(rows?.n || 0);
-  };
-  const dialect = sequelize.getDialect();
-  const dayExpr = dialect === 'mysql' ? 'UTC_TIMESTAMP() - INTERVAL 1 DAY' : "datetime('now', '-1 day')";
-  const hourExpr = dialect === 'mysql' ? 'UTC_TIMESTAMP() - INTERVAL 1 HOUR' : "datetime('now', '-1 hour')";
-
-  const [sentToday, sentHour] = await Promise.all([one(dayExpr), one(hourExpr)]);
-  if (campaign.dailyLimit && sentToday >= campaign.dailyLimit) {
-    return { ok: false, reason: `daily limit reached (${sentToday}/${campaign.dailyLimit})` };
-  }
-  const hourly = account?.hourlyLimit ?? campaign.hourlyLimit;
-  if (hourly && sentHour >= hourly) {
-    return { ok: false, reason: `hourly limit reached (${sentHour}/${hourly})` };
-  }
-  return { ok: true };
-}
+// Limits — PROMPT 9.1 moves quota enforcement into services/sending-account-
+// allocator.js: atomic, database-backed day/hour reservation against the
+// sending_account_usage table. Effective limits = min(account, campaign);
+// account-global limits stay authoritative across campaigns (§37-39).
 
 // ---------------------------------------------------------------------------
 // Worker tick: claim -> re-check everything -> send -> events -> advance.
 
+// ---------------------------------------------------------------------------
+// Worker recovery (§67) — jobs stuck in 'sending' longer than LOCK_STALE_MS
+// (worker crashed/restarted after claiming) are reclaimed. If a SENT event
+// already exists for the job we finalize it instead of re-sending.
+const LOCK_STALE_MS = 10 * 60 * 1000;
+
+async function recoverStaleJobs() {
+  const cutoff = new Date(Date.now() - LOCK_STALE_MS);
+  const stuck = await models.EmailJob.findAll({
+    where: { status: 'sending', claimedAt: { [Op.lt]: cutoff } },
+    limit: 50,
+  });
+  let recovered = 0, finalized = 0;
+  for (const job of stuck) {
+    const sent = await models.EmailEvent.findOne({ where: { emailJobId: job.id, eventType: 'SENT' } });
+    if (sent) {
+      await job.update({ status: 'sent', sentAt: job.sentAt || sent.eventTimestamp });
+      finalized++;
+    } else {
+      // Release the reservation if one exists for that account, then requeue.
+      if (job.sendingAccountId) await allocator.releaseUsage(job.sendingAccountId).catch(() => {});
+      await job.update({ status: 'queued', claimedAt: null, claimedBy: null, lastError: 'recovered after stale lock' });
+      recovered++;
+    }
+  }
+  return { recovered, finalized };
+}
+
 async function processDueJobs() {
+  try { await recoverStaleJobs(); } catch { /* recovery is best-effort; never block sends */ }
   const due = await models.EmailJob.findAll({
     where: { status: 'queued' },
     limit: MAX_BATCH,
@@ -299,6 +320,7 @@ async function processDueJobs() {
     const freshJob = await models.EmailJob.findByPk(job.id);
     const campaign = await models.Campaign.findByPk(freshJob.campaignId);
     const recipient = await models.CampaignLead.findByPk(freshJob.campaignRecipientId);
+    let reservedAccountId = null; // released in catch if the send path throws
 
     try {
       // Re-check campaign state at send time (Prompt 6 §41). 'running' is
@@ -326,22 +348,31 @@ async function processDueJobs() {
         continue;
       }
 
-      const account = campaign.sendingAccountId
-        ? await models.SmtpAccount.findByPk(campaign.sendingAccountId)
-        : null;
-      if (!account || !account.isEnabled) {
-        await freshJob.update({ status: 'queued', claimedAt: null, claimedBy: null, lastError: 'sending account disabled' });
+      // PROMPT 9.1 — schedule + account pool. Campaign window first, then the
+      // allocator enforces account eligibility, account schedule, sticky
+      // assignment, fallback policy and ATOMIC day/hour quota reservation.
+      if (!allocator.campaignInSchedule(campaign, new Date())) {
+        await freshJob.update({ status: 'queued', claimedAt: null, claimedBy: null, lastError: 'outside campaign sending window' });
         results.skipped++;
         continue;
       }
-
-      const limits = await withinLimits(campaign, account);
-      if (!limits.ok) {
-        // Requeue for the next worker tick (not a failure)
-        await freshJob.update({ status: 'queued', claimedAt: null, claimedBy: null, lastError: limits.reason });
+      const alloc = await allocator.allocateAndReserve(campaign, recipient, new Date());
+      if (!alloc.ok) {
+        const patch = { status: 'queued', claimedAt: null, claimedBy: null, lastError: alloc.reason };
+        if (alloc.paused) patch.scheduledFor = new Date(Date.now() + 15 * 60 * 1000); // hold until account available
+        await freshJob.update(patch);
         results.skipped++;
         continue;
       }
+      const account = alloc.account;
+      reservedAccountId = account.id;
+      // Recipient-level assignment (§23): remember the account + how it was chosen.
+      await recipient.update({
+        sendingAccountId: account.id,
+        assignmentMethod: alloc.method,
+        assignedAt: new Date(),
+      });
+      await freshJob.update({ sendingAccountId: account.id });
 
       const step = await models.CampaignStep.findByPk(freshJob.stepId);
       if (!step) {
@@ -427,6 +458,7 @@ async function processDueJobs() {
       if (result.ok) {
         await freshJob.update({ status: 'sent', sentAt: new Date(), messageId: result.messageId });
         await recipient.update({ lastSentAt: new Date(), status: 'active' });
+        await account.update({ lastSentAt: new Date() }).catch(() => {});
         await recordEvent({
           organizationId: campaign.organizationId,
           campaignId: campaign.id,
@@ -434,13 +466,18 @@ async function processDueJobs() {
           emailJobId: freshJob.id,
           messageId: result.messageId,
           eventType: 'SENT',
+          sendingAccountId: account.id,
+          sequenceStepId: step.id,
           metadata: { subject },
         });
         await campaign.increment('emailsSent');
         results.sent++;
       } else {
         const attempts = freshJob.attempts + 1;
-        const permanent = result.failureClass === 'auth' || result.failureClass === 'dns' || result.failureClass === 'permanent';
+        const permanent = ['AUTHENTICATION_ERROR', 'PERMANENT_FAILURE', 'MAILBOX_UNAVAILABLE'].includes(result.failureClass);
+        // Capacity was reserved before the SMTP attempt — give it back so a
+        // failed send never burns a day/hour quota unit.
+        await allocator.releaseUsage(account.id).catch(() => {});
         if (permanent || attempts >= freshJob.maxAttempts) {
           await freshJob.update({ status: 'failed', attempts, failureClass: result.failureClass, lastError: result.error });
           await recordEvent({
@@ -449,17 +486,22 @@ async function processDueJobs() {
             campaignRecipientId: recipient.id,
             emailJobId: freshJob.id,
             eventType: 'FAILED',
+            sendingAccountId: account.id,
+            sequenceStepId: step.id,
             metadata: { error: result.error, failureClass: result.failureClass },
           });
           await campaign.increment('totalFailed');
         } else {
-          // transient: retry with linear backoff
-          const retryAt = new Date(Date.now() + attempts * 60 * 1000);
+          // transient: retry with exponential backoff + jitter (§36)
+          const backoffMs = Math.min(2 ** attempts * 60 * 1000, 60 * 60 * 1000);
+          const jitterMs = Math.floor(Math.random() * 30 * 1000);
+          const retryAt = new Date(Date.now() + backoffMs + jitterMs);
           await freshJob.update({ status: 'queued', attempts, claimedAt: null, claimedBy: null, failureClass: result.failureClass, lastError: result.error, scheduledFor: retryAt });
         }
         results.failed++;
       }
     } catch (err) {
+      if (reservedAccountId) await allocator.releaseUsage(reservedAccountId).catch(() => {});
       await freshJob.update({ status: 'failed', failureClass: 'permanent', lastError: 'internal error' }).catch(() => {});
       results.failed++;
     }
@@ -492,7 +534,7 @@ module.exports = {
   withinSendingWindow,
   queueNextStepForRecipient,
   claimJob,
-  withinLimits,
+  recoverStaleJobs,
   processDueJobs,
   startWorker,
   recordEvent,

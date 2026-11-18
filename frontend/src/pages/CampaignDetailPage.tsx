@@ -11,6 +11,7 @@ import {
 import { campaignService } from "@/services/campaign";
 import { onCampaignUpdated } from "@/socket";
 import { signatureService, type EmailSignature } from "@/services/signature";
+import { campaignSendingPoolService, type PoolAccount } from "@/services/campaignSendingPool";
 import { Badge } from "@/components/Badge";
 import { useConfirmDialog, type ConfirmOptions } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
@@ -43,6 +44,7 @@ export function CampaignDetailPage() {
   const [analytics, setAnalytics] = useState<CampaignAnalyticsV2 | null>(null);
   const [events, setEvents] = useState<EmailEvent[]>([]);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [pool, setPool] = useState<PoolAccount[] | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "activity">("overview");
 
   const [isLoading, setIsLoading] = useState(true);
@@ -62,6 +64,14 @@ export function CampaignDetailPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<string | null>(null);
+
+  // Pool summary for the Sending configuration card (real, live data).
+  useEffect(() => {
+    if (!id) return;
+    campaignSendingPoolService.list(id)
+      .then((res) => setPool(res.data || []))
+      .catch(() => setPool(null));
+  }, [id]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -237,7 +247,7 @@ export function CampaignDetailPage() {
             to={`/campaigns/${id}/recipients`}
             className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50"
           >
-            <Users size={15} /> Recipients
+            <Users size={15} /> Leads
           </Link>
           <Link
             to={`/campaigns/${id}/analytics`}
@@ -337,7 +347,7 @@ export function CampaignDetailPage() {
       {/* KPI cards */}
       {analytics && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <Kpi label="Recipients" value={analytics.totalRecipients} />
+          <Kpi label="Leads" value={analytics.totalRecipients} />
           <Kpi label="Sent" value={analytics.sent} />
           <Kpi label="Delivered" value={analytics.delivered} />
           <Kpi label="Replies" value={analytics.replied} />
@@ -368,7 +378,12 @@ export function CampaignDetailPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {/* Sequence timeline */}
           <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-            <h2 className="text-sm font-semibold text-slate-900 mb-4">Sequence</h2>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h2 className="text-sm font-semibold text-slate-900">Sequence</h2>
+              {steps.length > 0 && ["draft", "ready_for_review", "paused"].includes(status) && (
+                <Link to={`/campaigns/${id}/edit`} className="text-xs font-medium text-primary hover:underline">Edit →</Link>
+              )}
+            </div>
             {steps.length === 0 ? (
               <p className="text-sm text-slate-500">
                 No sequence emails yet.
@@ -378,30 +393,51 @@ export function CampaignDetailPage() {
               </p>
             ) : (
               <ol className="space-y-0">
-                {steps.map((step, i) => (
-                  <li key={step.id} className="relative pl-8 pb-6 last:pb-0">
-                    {i < steps.length - 1 && (
-                      <span className="absolute left-[11px] top-6 bottom-0 w-px bg-slate-200" aria-hidden />
-                    )}
-                    <span className="absolute left-0 top-0.5 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center" aria-hidden>
-                      {i + 1}
-                    </span>
-                    <div className="text-sm font-medium text-slate-900">{step.name || `Email ${i + 1}`}</div>
-                    <div className="text-xs text-slate-500 mt-0.5">Subject: {effectiveStepSubject(step) || "—"}</div>
-                    <div className="text-xs text-slate-400 mt-1">
-                      {i > 0 && <>Wait {step.delayDays}d {step.delayHours ? `${step.delayHours}h` : ""} · </>}
-                      Body {stripHtml(effectiveStepBody(step)).length} chars
-                    </div>
-                  </li>
-                ))}
+                {steps.map((step, i) => {
+                  const subject = effectiveStepSubject(step) || "(no subject)";
+                  const bodyText = stripHtml(effectiveStepBody(step));
+                  const extraMinutes = (step as unknown as { delayMinutes?: number }).delayMinutes ?? 0;
+                  const wait = i > 0
+                    ? `Wait ${step.delayDays}d${step.delayHours ? ` ${step.delayHours}h` : ""}${extraMinutes ? ` ${extraMinutes}m` : ""}`.trim()
+                    : null;
+                  const variantsCount = step.variants?.length ?? 0;
+                  return (
+                    <li key={step.id} className="relative pl-8 pb-6 last:pb-0">
+                      {i < steps.length - 1 && (
+                        <span className="absolute left-[11px] top-6 bottom-0 w-px bg-slate-200" aria-hidden />
+                      )}
+                      <span className="absolute left-0 top-0.5 w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center" aria-hidden>
+                        {i + 1}
+                      </span>
+                      <div className="text-sm font-medium text-slate-900">{step.name || `Email ${i + 1}`}</div>
+                      <div className="text-sm text-slate-800 mt-1 leading-snug">{subject}</div>
+                      {bodyText && (
+                        <p className="text-xs text-slate-500 mt-1 line-clamp-2">{bodyText}</p>
+                      )}
+                      <div className="text-[11px] text-slate-400 mt-1.5 flex flex-wrap items-center gap-2">
+                        {wait && <span>{wait}</span>}
+                        {variantsCount > 1 && <span>{variantsCount} A/B variants</span>}
+                        <span>{bodyText.length} chars</span>
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </section>
 
           {/* Settings summary */}
           <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-            <h2 className="text-sm font-semibold text-slate-900 mb-4">Sending configuration</h2>
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <h2 className="text-sm font-semibold text-slate-900">Sending configuration</h2>
+              <Link to={`/campaigns/${id}/edit`} className="text-xs font-medium text-primary hover:underline">Edit →</Link>
+            </div>
             <dl className="space-y-3 text-sm">
+              <Row label="Sending accounts">
+                <Link to="/settings/email-sending" className="text-slate-800 hover:text-primary hover:underline">
+                  {pool == null ? "…" : pool.length === 0 ? "None assigned" : `${pool.length} account${pool.length === 1 ? "" : "s"} · even rotation`}
+                </Link>
+              </Row>
               <Row label="Signature">
                 <select
                   value={`${campaign.signatureMode || "inherit"}${campaign.signatureMode === "custom" ? `:${campaign.signatureId || ""}` : ""}`}
@@ -442,28 +478,20 @@ export function CampaignDetailPage() {
                   : "Mon – Fri (default)"}
               </Row>
               <Row label="Sending window">
-                {`${String(campaign.sendBetweenStartHour ?? 9).padStart(2, "0")}:00 – ${String(campaign.sendBetweenEndHour ?? 17).padStart(2, "0")}:00 UTC`}
+                {`${String(campaign.sendBetweenStartHour ?? 9).padStart(2, "0")}:00 – ${String(campaign.sendBetweenEndHour ?? 17).padStart(2, "0")}:00 ${campaign.timezone || "UTC"}`}
               </Row>
-              <Row label="Daily limit">{campaign.maxEmailsPerDay || campaign.dailyLimit || "—"}</Row>
+              {campaign.scheduledEndAt && (
+                <Row label="Ends">{new Date(campaign.scheduledEndAt).toLocaleString()}</Row>
+              )}
+              <Row label="Daily campaign limit">
+                {campaign.maxEmailsPerDay || campaign.dailyLimit || "—"}
+                {pool && pool.length > 0 && (
+                  <span className="text-slate-400"> · account pool: {pool.reduce((s, p) => s + (p.remainingToday ?? 0), 0)} left today</span>
+                )}
+              </Row>
               <Row label="Hourly limit">{campaign.hourlyLimit || "—"}</Row>
               <Row label="Campaign type">{campaign.campaignType}</Row>
             </dl>
-            {campaign.aiPersonalizationEnabled && (
-              <button
-                onClick={generateAi}
-                disabled={aiBusy}
-                className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100 disabled:opacity-60"
-              >
-                {aiBusy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                {aiBusy ? "Generating…" : "Generate AI sample"}
-              </button>
-            )}
-            {aiResult && (
-              <pre className="mt-3 text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 whitespace-pre-wrap text-slate-700">{aiResult}</pre>
-            )}
-            {aiError && (
-              <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert">{aiError}</p>
-            )}
           </section>
         </div>
       ) : (

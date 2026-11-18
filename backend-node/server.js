@@ -167,6 +167,7 @@ connectDB().then(() => {
   // ============================================================================
   app.use('/api/v1/auth', require('./routes/auth'));
   app.use('/api/v1/campaigns', require('./routes/campaigns'));
+  app.use('/api/v1/campaigns', require('./routes/campaign-accounts'));
   app.use('/api/v1/email-sending', require('./routes/email-sending'));
   app.use('/api/v1/signatures', require('./routes/signatures'));
   app.use('/api/v1/unsubscribe', require('./routes/unsubscribe'));

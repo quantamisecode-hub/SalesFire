@@ -60,6 +60,48 @@ router.post('/generate-sequence', async (req, res) => {
   }
 });
 
+// POST /api/v1/ai/regenerate-step — rewrite ONE email inside the current
+// sequence. Neighbouring steps are passed as read-only context so voice stays
+// coherent; the response is a single step object for the client to apply
+// behind an Accept.
+router.post('/regenerate-step', async (req, res) => {
+  try {
+    const { prompt, industry, tone, current, previous, next, position, totalSteps } = req.body || {};
+    if (!current || !String(current.bodyHtml || current.body || '').trim()) {
+      return res.status(422).json({ error: 'current step content is required' });
+    }
+    const pos = Math.max(1, parseInt(position, 10) || 1);
+    const total = Math.max(pos, parseInt(totalSteps, 10) || pos);
+    const known = await knownVariablesForOrg(req.user.org);
+    const step = await aiService.regenerateStep({
+      prompt: String(prompt || '').slice(0, 2000),
+      industry: String(industry || '').slice(0, 100),
+      tone: String(tone || '').slice(0, 100),
+      current: {
+        subject: String(current.subject || '').slice(0, 500),
+        bodyHtml: String(current.bodyHtml || current.body || '').slice(0, 20000),
+      },
+      previous: previous && (previous.subject || previous.bodyHtml || previous.body) ? {
+        subject: String(previous.subject || '').slice(0, 500),
+        bodyHtml: String(previous.bodyHtml || previous.body || '').slice(0, 20000),
+      } : null,
+      next: next && (next.subject || next.bodyHtml || next.body) ? {
+        subject: String(next.subject || '').slice(0, 500),
+        bodyHtml: String(next.bodyHtml || next.body || '').slice(0, 20000),
+      } : null,
+      position: pos,
+      totalSteps: total,
+      knownVariables: known,
+    });
+    // Sanitize model output — never trust it (§45).
+    step.bodyHtml = templateRenderer.sanitizeHtml(step.bodyHtml);
+    res.json({ success: true, data: { step, aiGenerated: true } }); // step.subjectPreserved is true when the first-email subject was kept
+  } catch (error) {
+    console.error('AI regenerate-step error:', error.message);
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'AI regeneration failed' });
+  }
+});
+
 // POST /api/v1/ai/generate-spintax — AI spintax writer (§27).
 router.post('/generate-spintax', async (req, res) => {
   try {

@@ -76,6 +76,45 @@ describe('renderTemplate (variable substitution)', () => {
   });
 });
 
+describe('buildLeadVars (render context)', () => {
+  const recipient = {
+    firstName: 'Ada', lastName: 'Lovelace', companyName: 'Analytical Engines',
+    jobTitle: 'CTO', email: 'ada@example.com',
+  };
+
+  test('resolves the imported personalization column in the real send path', () => {
+    const lead = {
+      firstName: 'Ada', lastName: 'Lovelace', companyName: 'Analytical Engines',
+      jobTitle: 'CTO', personalization: 'Saw your Series B announcement',
+      customFields: undefined,
+    };
+    const vars = engine.buildLeadVars(recipient, lead, null, 'https://example.com/unsub');
+    assert.strictEqual(vars.personalization, 'Saw your Series B announcement');
+    const rendered = engine.renderForRecipient({
+      step: { subjectTemplate: 'Quick idea for {{first_name}}', bodyTemplate: '<p>Note: {{personalization}}</p>' },
+      variants: [],
+      vars,
+      seed: 'test-seed',
+    });
+    assert.ok(rendered.html.includes('Saw your Series B announcement'));
+    assert.ok(!rendered.html.includes('{{personalization}}'));
+    assert.ok(!(rendered.unresolved || []).includes('personalization'));
+  });
+
+  test('personalization falls back to empty string when the lead has none', () => {
+    const vars = engine.buildLeadVars(recipient, null, null, '');
+    assert.strictEqual(vars.personalization, '');
+  });
+
+  test('imported custom fields still resolve alongside builtins', () => {
+    const lead = { personalization: 'p', customFields: { recent_funding: '$40M', 'bad_key!': 'x' } };
+    const vars = engine.buildLeadVars(recipient, lead, null, '');
+    assert.strictEqual(vars.recent_funding, '$40M');
+    assert.strictEqual(vars['bad_key!'], undefined);
+    assert.strictEqual(vars.personalization, 'p');
+  });
+});
+
 describe('suppression', () => {
   test('isSuppressed blocks emails on the org suppression list', async () => {
     const { org } = await seedOrg();

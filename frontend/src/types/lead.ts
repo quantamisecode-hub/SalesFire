@@ -54,6 +54,8 @@ export interface ImportValidationCounts {
   missingEmail: number;
   duplicateInFile: number;
   duplicateExisting: number;
+  /** Leads already enrolled in the target campaign (import-into-campaign only). */
+  campaignEnrolled?: number;
   suppressed: number;
 }
 

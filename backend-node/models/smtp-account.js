@@ -89,6 +89,13 @@ SmtpAccount.init({
     defaultValue: 0,
     field: 'min_delay_minutes',
   },
+  // Instantly-style "Minimum wait time" — gap (in minutes) required between
+  // two sends from THIS account, across ALL campaigns it's pooled into.
+  minimumWaitMinutes: {
+    type: DataTypes.INTEGER,
+    defaultValue: 1,
+    field: 'minimum_wait_minutes',
+  },
   maxDelayMinutes: {
     type: DataTypes.INTEGER,
     defaultValue: 0,
@@ -98,6 +105,38 @@ SmtpAccount.init({
     type: DataTypes.BOOLEAN,
     defaultValue: true,
     field: 'is_enabled',
+  },
+  // PROMPT 9.1 — account health & warmup (real data only, derived where possible)
+  healthStatus: {
+    type: DataTypes.STRING(20),
+    field: 'health_status',
+    defaultValue: 'unknown', // healthy | warning | critical | unknown
+  },
+  warmupStatus: {
+    type: DataTypes.STRING(20),
+    field: 'warmup_status',
+    defaultValue: 'not_started', // not_started | warming | active | paused | completed
+  },
+  warmupDailyLimit: {
+    type: DataTypes.INTEGER,
+    field: 'warmup_daily_limit',
+  },
+  // IANA timezone identifier (e.g. "America/New_York") — never a fixed UTC offset.
+  timezone: {
+    type: DataTypes.STRING(64),
+    field: 'timezone',
+    defaultValue: 'UTC',
+  },
+  // Per-day sending windows keyed by ISO day ("1".."7", 1=Monday):
+  // { "1": { enabled: true, start: "09:00", end: "17:00" }, ... }
+  // NULL = inherit campaign/default window (all weekdays 09-17).
+  sendingSchedule: {
+    type: DataTypes.JSON,
+    field: 'sending_schedule',
+  },
+  lastSentAt: {
+    type: DataTypes.DATE,
+    field: 'last_sent_at',
   },
   status: {
     type: DataTypes.STRING(50),

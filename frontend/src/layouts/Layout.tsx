@@ -16,6 +16,8 @@ import {
   Sparkles,
   Send,
   PenLine,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -34,25 +36,31 @@ function NavItem({
   href,
   active,
   onClick,
+  collapsed = false,
 }: {
   icon: React.FC<{ size?: number | string; className?: string }>;
   label: string;
   href: string;
   active: boolean;
   onClick: () => void;
+  collapsed?: boolean;
 }) {
   return (
     <a
       href={href}
       onClick={onClick}
+      title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
       className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+        collapsed ? "justify-center px-0" : ""
+      } ${
         active
           ? "bg-primary-50 text-primary-700"
           : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
       }`}
     >
-      <Icon size={18} className={active ? "text-primary-600" : "text-slate-400"} />
-      <span>{label}</span>
+      <Icon size={18} className={`shrink-0 ${active ? "text-primary-600" : "text-slate-400"}`} />
+      {!collapsed && <span>{label}</span>}
     </a>
   );
 }
@@ -66,6 +74,7 @@ function NavGroup({
   onToggle,
   onNavigate,
   isChildActive,
+  collapsed = false,
 }: {
   icon: React.FC<{ size?: number | string; className?: string }>;
   label: string;
@@ -76,7 +85,25 @@ function NavGroup({
   onToggle: () => void;
   onNavigate: (href: string) => void;
   isChildActive: (href: string) => boolean;
+  collapsed?: boolean;
 }) {
+  // In collapsed (icon-only) mode: show just the parent icon, click jumps to first child.
+  if (collapsed) {
+    const firstActive = children.find((c) => isChildActive(c.href));
+    return (
+      <a
+        href={children[0].href}
+        onClick={(e) => { e.preventDefault(); onNavigate((firstActive || children[0]).href); }}
+        title={label}
+        aria-label={label}
+        className={`flex items-center justify-center rounded-lg px-0 py-2.5 text-sm font-medium transition ${
+          active ? "bg-primary-50 text-primary-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        }`}
+      >
+        <Icon size={18} className={active ? "text-primary-600" : "text-slate-400"} />
+      </a>
+    );
+  }
   return (
     <div>
       <button
@@ -123,6 +150,15 @@ export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [emailSendingOpen, setEmailSendingOpen] = useState(true);
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("salesfire.sidebar.collapsed") === "1"; } catch { return false; }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((v) => {
+      try { window.localStorage.setItem("salesfire.sidebar.collapsed", v ? "0" : "1"); } catch { /* ignore */ }
+      return !v;
+    });
+  };
 
   const isActive = (href: string) =>
     location.pathname === href || location.pathname.startsWith(href + "/");
@@ -155,11 +191,14 @@ export function Layout() {
         <div className="flex h-14 items-center justify-between gap-4 px-4">
           <div className="flex items-center gap-3">
             <button
-              className="rounded-md p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
-              onClick={() => setMobileOpen(!mobileOpen)}
-              aria-label="Toggle navigation"
+              className="rounded-md p-2 text-slate-600 hover:bg-slate-100"
+              onClick={() => (typeof window !== "undefined" && window.innerWidth >= 1024) ? toggleCollapsed() : setMobileOpen(!mobileOpen)}
+              aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
-              {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+              {typeof window !== "undefined" && window.innerWidth < 1024
+                ? (mobileOpen ? <X size={18} /> : <Menu size={18} />)
+                : (collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />)}
             </button>
             <a href="/dashboard" className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-600 to-accent text-white shadow-card">
@@ -246,7 +285,7 @@ export function Layout() {
           takes the remaining space. Each page governs its own readable width. */}
       <div className="flex min-w-0">
         {/* Sidebar - desktop */}
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-56 shrink-0 border-r border-slate-200 bg-white p-3 lg:block">
+        <aside className={`sticky top-14 hidden h-[calc(100vh-3.5rem)] shrink-0 border-r border-slate-200 bg-white p-3 transition-[width] duration-200 ease-in-out lg:block ${collapsed ? "w-[72px]" : "w-60"}`}>
           <nav className="space-y-1">
             {NAV_ITEMS.map((item) => (
               <NavItem
@@ -256,6 +295,7 @@ export function Layout() {
                 href={item.href}
                 active={isActive(item.href)}
                 onClick={() => go(item.href)}
+                collapsed={collapsed}
               />
             ))}
             <NavGroup
@@ -267,6 +307,7 @@ export function Layout() {
               onToggle={() => setEmailSendingOpen((v) => !v)}
               onNavigate={go}
               isChildActive={isActive}
+              collapsed={collapsed}
             />
           </nav>
         </aside>

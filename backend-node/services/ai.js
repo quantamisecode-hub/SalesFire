@@ -183,11 +183,15 @@ const SEQUENCE_STEPS_SCHEMA_NOTE = [
 // AI sequence writer (§25-26). The prompt may mention an industry/goal/tone;
 // the model may only reference the variables whitelisted by the org.
 async function generateSequence({ prompt, industry, tone, stepsCount, knownVariables }) {
-  const vars = [...(knownVariables || [])].slice(0, 60).join(', ');
+  const known = [...(knownVariables || [])].slice(0, 80).sort();
+  const whitelist = known.map((v) => `  • {{${v}}}`).join('\n');
   const system = [
     'You write cold-outreach email sequences for a B2B sales tool.',
+    'CRITICAL — VARIABLE WHITELIST (memorize exactly; no other token is valid):',
+    whitelist || '  (no variables available)',
     'STRICT RULES:',
-    `- Reference ONLY these variables, always as {{name}}: ${vars}.`,
+    '- Use ONLY variables from that whitelist. Never invent a variable, never guess a name — not even a plausible one like sendingAccountLastName.',
+    `- If a needed personal detail is not in the whitelist or the verified data, write plain text instead of {{...}}.`,
     '- Never invent facts about the recipient or the sender.',
     '- Never include scripts, event handlers, javascript: URLs, iframes or forms.',
     SEQUENCE_STEPS_SCHEMA_NOTE,
@@ -206,6 +210,29 @@ async function generateSequence({ prompt, industry, tone, stepsCount, knownVaria
     err.statusCode = 502;
     throw err;
   }
+  // Post-generation whitelist enforcement: any {{token}} the model invented
+  // gets named in the error, instead of poisoning the saved sequence.
+  const knownSet = new Set(known);
+  const VAR_TOKEN = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\|[^}]*)?\s*\}\}/g;
+  const checkText = (text, field) => {
+    const out = [];
+    for (const m of String(text || '').matchAll(VAR_TOKEN)) {
+      const name = m[1];
+      if (!knownSet.has(name)) out.push(`${name} (in ${field})`);
+    }
+    return out;
+  };
+  const violations = [
+    ...parsed.flatMap((s, i) => [
+      ...checkText(s?.subject, `subject of email ${i + 1}`),
+      ...checkText(s?.bodyHtml || s?.body, `body of email ${i + 1}`),
+    ]),
+  ];
+  if (violations.length) {
+    const err = new Error(`AI invented these invalid variables — try again: ${[...new Set(violations)].join(', ')}`);
+    err.statusCode = 502;
+    throw err;
+  }
   // Shape + safety-check every step server-side before it reaches the client.
   return parsed.slice(0, 7).map((s, i) => ({
     subject: String(s.subject || '').slice(0, 500),
@@ -214,6 +241,89 @@ async function generateSequence({ prompt, industry, tone, stepsCount, knownVaria
     delayUnit: ['minutes', 'hours', 'days'].includes(s.delayUnit) ? s.delayUnit : 'days',
     stepNumber: i + 1,
   }));
+}
+
+// AI single-step writer (§25-26, step-level regeneration). Rewrites ONE email
+// in an existing sequence — the neighboring steps are provided as read-only
+// context so the voice stays coherent, but the model is told in no uncertain
+// terms that only this one step may change. The client keeps identity/delay.
+async function regenerateStep({ prompt, industry, tone, current, previous, next, position, totalSteps, knownVariables }) {
+  const known = [...(knownVariables || [])].slice(0, 80).sort();
+  const whitelist = known.map((v) => `  • {{${v}}}`).join('\n');
+  const where = position === 1 ? 'this is the FIRST (initial) email' : `this is follow-up number ${position} of ${totalSteps}`;
+  const system = [
+    'You rewrite a single email inside an existing B2B cold-outreach sequence.',
+    'CRITICAL — VARIABLE WHITELIST (memorize exactly; no other token is valid):',
+    whitelist || '  (no variables available)',
+    'STRICT RULES:',
+    '- Rewrite ONLY the email marked "CURRENT". The previous and next emails stay EXACTLY as written — they are context, not inputs to edit.',
+    '- Return ONLY a JSON object: { "subject": string, "bodyHtml": string }.',
+    '- If this is a follow-up, keep subject as "" (empty) unless the instruction asks to change it — an empty subject continues the thread.',
+    '- Use ONLY variables from that whitelist. Never invent a variable, not even a plausible one like sendingAccountLastName.',
+    '- If a needed personal detail is not in the whitelist, write plain text instead of {{...}}.',
+    '- Never invent facts about the recipient or the sender.',
+    '- Never include scripts, event handlers, javascript: URLs, iframes or forms or unsubscribe footers or image tags.',
+    '- Bodies: 60-140 words, plain professional language, one clear call to action. Simple HTML: <p>, <br>, <strong>, <em>, <a>, <ul>/<li>.',
+    `- ${where}.`,
+    position === 1
+      ? '- This is the FIRST email: "subject" is REQUIRED and must be a short, specific subject line — an empty subject is only valid for thread-continuing follow-ups.'
+      : '- "subject" may be "" (empty) only to continue the existing thread; keep it empty unless the instruction asks to change it.',
+  ].join('\n');
+  const context = [];
+  if (previous) {
+    context.push('PREVIOUS (do not touch):', `subject: ${previous.subject || '(no subject — thread continuation)'}`, `body: ${String(previous.bodyHtml || '').slice(0, 2000)}`);
+  }
+  context.push('CURRENT (rewrite me):', `subject: ${current.subject || '(no subject — thread continuation)'}`, `body: ${String(current.bodyHtml || '').slice(0, 3000)}`);
+  if (next) {
+    context.push('NEXT (do not touch):', `subject: ${next.subject || '(no subject — thread continuation)'}`, `body: ${String(next.bodyHtml || '').slice(0, 2000)}`);
+  }
+  const user = [
+    `Rewrite ONLY the CURRENT email as instructed below. Position: ${position} of ${totalSteps}.`,
+    industry ? `Industry: ${industry}.` : '',
+    tone ? `Tone: ${tone}.` : 'Tone: professional, concise.',
+    `Instruction: ${prompt || 'Improve this email while keeping its intent — tighten the copy and keep the same ask.'}`,
+    '',
+    ...context,
+  ].filter(Boolean).join('\n');
+
+  const raw = await callKimi({ system, user, temperature: 0.6, maxTokens: 1400 });
+  const parsed = parseJsonLoose(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const err = new Error('AI step response was not a single email object.');
+    err.statusCode = 502;
+    throw err;
+  }
+  // Whitelist enforcement: any {{token}} the model invented gets named.
+  const knownSet = new Set(known);
+  const VAR_TOKEN = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\|[^}]*)?\s*\}\}/g;
+  const violations = [];
+  const checkText = (text, field) => {
+    for (const m of String(text || '').matchAll(VAR_TOKEN)) {
+      if (!knownSet.has(m[1])) violations.push(`${m[1]} (in ${field})`);
+    }
+  };
+  checkText(parsed?.subject, 'subject');
+  checkText(parsed?.bodyHtml || parsed?.body, 'body');
+  if (violations.length) {
+    const err = new Error(`AI invented these invalid variables — try again: ${[...new Set(violations)].join(', ')}`);
+    err.statusCode = 502;
+    throw err;
+  }
+  // Enforcement for step 1: an empty subject for the first email destroys a
+  // required field (the send pipeline refuses thread-continuation for the
+  // initial email). Keep the previous subject rather than blanking it — the
+  // same honest-fallback the sequence validator demands.
+  let subjectPreserved = false;
+  let subject = String(parsed.subject || '').slice(0, 500);
+  if (position === 1 && !subject.trim() && String(current?.subject || '').trim()) {
+    subject = String(current.subject).slice(0, 500);
+    subjectPreserved = true;
+  }
+  return {
+    subject,
+    bodyHtml: String(parsed.bodyHtml || parsed.body || '').slice(0, 20000),
+    subjectPreserved,
+  };
 }
 
 // AI spintax writer (§27): wraps phrases in {{RANDOM | a | b | c}}.
@@ -231,4 +341,5 @@ async function generateSpintax({ text }) {
 
 module.exports.generateSequence = generateSequence;
 module.exports.generateSpintax = generateSpintax;
+module.exports.regenerateStep = regenerateStep;
 module.exports.callKimi = callKimi;

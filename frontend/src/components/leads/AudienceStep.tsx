@@ -15,11 +15,38 @@ import { LeadDetailDrawer } from "./LeadDetailDrawer";
 import { Badge } from "@/components/Badge";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
+import { IconSelect } from "@/components/ui/IconSelect";
+import {
+  Layers, Sparkles, CheckCircle2, Send, Reply, Undo2, UserMinus,
+  ShieldX, CircleHelp, ShieldCheck, Type, Globe, Server,
+} from "lucide-react";
 import type { Lead } from "@/types/lead";
 import type { AudienceCounts, CampaignRecipient } from "@/types/prompt6";
+import type { IconSelectOption } from "@/components/ui/IconSelect";
 
-const LEAD_STATUSES = ["new", "approved", "contacted", "replied", "bounced", "unsubscribed", "suppressed", "invalid"];
-const EMAIL_STATUSES = ["unknown", "verified", "invalid", "bounced", "unsubscribed", "syntax_valid", "domain_valid", "mx_valid"];
+// Instantly-style options: icon + capitalized label.
+const LEAD_STATUS_OPTIONS: readonly IconSelectOption[] = [
+  { value: "all", label: "All", icon: Layers },
+  { value: "new", label: "New", icon: Sparkles },
+  { value: "approved", label: "Approved", icon: CheckCircle2 },
+  { value: "contacted", label: "Contacted", icon: Send },
+  { value: "replied", label: "Replied", icon: Reply },
+  { value: "bounced", label: "Bounced", icon: Undo2 },
+  { value: "unsubscribed", label: "Unsubscribed", icon: UserMinus },
+  { value: "suppressed", label: "Suppressed", icon: Ban },
+  { value: "invalid", label: "Invalid", icon: ShieldX },
+] as const;
+
+const EMAIL_STATUS_OPTIONS: readonly IconSelectOption[] = [
+  { value: "all", label: "All", icon: Layers },
+  { value: "unknown", label: "Unknown", icon: CircleHelp },
+  { value: "verified", label: "Verified", icon: ShieldCheck },
+  { value: "syntax_valid", label: "Syntax Valid", icon: Type },
+  { value: "domain_valid", label: "Domain Valid", icon: Globe },
+  { value: "mx_valid", label: "MX Valid", icon: Server },
+  { value: "invalid", label: "Invalid", icon: ShieldX },
+  { value: "bounced", label: "Bounced", icon: Undo2 },
+] as const;
 
 // Column management (§9) — visibility persisted in localStorage.
 const COLUMN_DEFS = [
@@ -290,22 +317,20 @@ export function AudienceStep({
       {/* Filters drawer (§10) — server-side */}
       {filtersOpen && (
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm grid grid-cols-1 sm:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Lead status</label>
-            <select className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-300" value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
-              <option value="all">All</option>
-              {LEAD_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">Email status</label>
-            <select className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-300" value={emailStatusFilter}
-              onChange={(e) => { setEmailStatusFilter(e.target.value); setPage(1); }}>
-              <option value="all">All</option>
-              {EMAIL_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-            </select>
-          </div>
+          <IconSelect
+            id="lead-status-filter"
+            label="Lead status"
+            value={statusFilter}
+            options={LEAD_STATUS_OPTIONS}
+            onChange={(v) => { setStatusFilter(v); setPage(1); }}
+          />
+          <IconSelect
+            id="email-status-filter"
+            label="Email status"
+            value={emailStatusFilter}
+            options={EMAIL_STATUS_OPTIONS}
+            onChange={(v) => { setEmailStatusFilter(v); setPage(1); }}
+          />
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Industry</label>
             <input className="w-full px-2 py-1.5 text-sm rounded-lg border border-slate-300" value={industryFilter}

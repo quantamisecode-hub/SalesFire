@@ -21,6 +21,8 @@ const CampaignStepVariant = require('./campaign-step-variant');
 const EmailVerification = require('./email-verification');
 const WarmupPlan = require('./warmup-plan');
 const EmailSignature = require('./email-signature');
+const SendingAccountUsage = require('./sending-account-usage');
+const AuditLog = require('./audit-log');
 
 // Run associations (each model defines static associate) - unique models only
 const models = {
@@ -44,6 +46,8 @@ const models = {
   EmailVerification,
   WarmupPlan,
   EmailSignature,
+  SendingAccountUsage,
+  AuditLog,
 };
 
 Object.values(models).forEach((model) => {
@@ -69,5 +73,7 @@ models.CampaignStepVariants = CampaignStepVariant;
 models.EmailVerifications = EmailVerification;
 models.WarmupPlans = WarmupPlan;
 models.EmailSignatures = EmailSignature;
+models.SendingAccountUsages = SendingAccountUsage;
+models.AuditLogs = AuditLog;
 
 module.exports = models;

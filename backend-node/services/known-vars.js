@@ -6,7 +6,7 @@ const templateRenderer = require('./template-renderer');
 
 const BUILTIN_LEAD_FIELDS = [
   'first_name', 'last_name', 'company_name', 'job_title', 'website', 'email',
-  'location', 'industry', 'company_size', 'phone', 'linkedin',
+  'location', 'industry', 'company_size', 'phone', 'linkedin', 'personalization',
 ];
 
 async function knownVariablesForOrg(organizationId) {

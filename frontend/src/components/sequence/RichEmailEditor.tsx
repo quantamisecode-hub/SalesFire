@@ -8,18 +8,38 @@
 // defense in depth, §45).
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import {
-  Bold, Italic, Underline, Link2, Image as ImageIcon, Smile, Braces, Shuffle,
-  Sparkles, Unlink2, Code2, Loader2, X,
+  Bold, Italic, Underline, Link2, Image as ImageIcon, Smile, Zap, Shuffle,
+  Sparkles, Unlink2, Code2, Loader2, X, Eraser,
 } from "lucide-react";
 import { sequenceService } from "@/services/sequence";
 
 const EMOJIS = ["👋", "🙏", "👍", "🚀", "💡", "📈", "🎯", "✅", "⭐", "🔥", "😊", "🙌", "📅", "☕", "🤝", "💪", "🥳", "📌", "⏰", "🧠"];
 
 const EMBEDDED_VARIABLES = [
+  // Lead fields — all are import-supported (lead-import.js template) and
+  // resolved by campaign-engine.js at render time. Keep in sync with BUILTIN_LEAD_FIELDS.
   "first_name", "last_name", "company_name", "job_title", "website", "email",
-  "location", "industry", "company_size", "phone", "linkedin",
-  "accountSignature", "sendingAccountFirstName", "unsubscribeUrl",
+  "location", "industry", "company_size", "phone", "linkedin", "personalization",
+  // Platform / sending-account scoped (resolved at render time).
+  "accountSignature", "sendingAccountFirstName", "sendingAccountName", "sendingAccountEmail", "unsubscribeUrl",
 ];
+
+/** camelCase → snake_case so we can detect duplicate wire aliases. */
+const camelToSnake = (v: string) => v.replace(/([A-Z])/g, (_, c) => `_${c.toLowerCase()}`);
+
+/**
+ * The backend whitelist tracks both casings ({{first_name}} / {{firstName}})
+ * of the same lead fields. Show each field once — prefer the snake_case form
+ * (what users naturally type and the AI emits) — and keep the rest as-is.
+ */
+function uniqueForDisplay(vars: string[]): string[] {
+  const set = new Set(vars);
+  return vars.filter((v) => {
+    if (!/[A-Z]/.test(v)) return true; // snake_case — always show
+    const snake = camelToSnake(v);
+    return !set.has(snake); // hide camelCase duplicate
+  });
+}
 
 // Email-safe fonts, with the exact names accepted by execCommand('fontName')
 // and rendered safely by mail clients.
@@ -340,7 +360,7 @@ export const RichEmailEditor = forwardRef<RichEmailEditorHandle, RichEmailEditor
       setPopover(null);
     };
 
-    const variables = [...new Set([...EMBEDDED_VARIABLES, ...knownVariables])];
+    const variables = uniqueForDisplay([...new Set([...EMBEDDED_VARIABLES, ...knownVariables])]);
 
     const ToolBtn = ({ onClick, active, title, children, danger }: {
       onClick: () => void; active?: boolean; title: string; children: React.ReactNode; danger?: boolean;
@@ -376,7 +396,7 @@ export const RichEmailEditor = forwardRef<RichEmailEditorHandle, RichEmailEditor
               onClick={() => setSubjectPicker(!subjectPicker)}
               className={`p-1.5 rounded-md transition-colors ${subjectPicker ? "bg-violet-100 text-violet-700" : "text-slate-600 hover:bg-slate-100"}`}
             >
-              <Braces size={13} />
+              <Zap size={13} />
             </button>
           </div>
           <input
@@ -433,10 +453,16 @@ export const RichEmailEditor = forwardRef<RichEmailEditorHandle, RichEmailEditor
           <ToolBtn title="Insert image" onClick={() => insert(`<img src="https://" alt="image" style="max-width:100%" />`, true)}><ImageIcon size={14} /></ToolBtn>
           <ToolBtn title="Emoji" onClick={() => setPopover(popover === "emoji" ? null : "emoji")}><Smile size={14} /></ToolBtn>
           <div className="w-px h-4 bg-slate-200 mx-1" />
-          <ToolBtn title="Insert variable" onClick={() => setPopover(popover === "variable" ? null : "variable")}><Braces size={14} /></ToolBtn>
+          <ToolBtn title="Insert variable" onClick={() => setPopover(popover === "variable" ? null : "variable")}><Zap size={14} /></ToolBtn>
           <ToolBtn title="Spintax builder" onClick={() => setPopover(popover === "spintax" ? null : "spintax")}><Shuffle size={14} /></ToolBtn>
           <ToolBtn title="AI tools" onClick={() => setPopover(popover === "ai" ? null : "ai")}><Sparkles size={14} /></ToolBtn>
           <ToolBtn title="Insert unsubscribe link" onClick={() => insert(`<a href="{{unsubscribeUrl}}">Unsubscribe</a>`, true)}><Unlink2 size={14} /></ToolBtn>
+          <ToolBtn title="Clean HTML — strip scripts and unsafe handlers" onClick={() => {
+            const src = codeView ? codeText : (bodyRef.current?.innerHTML ?? bodyHtml);
+            const cleaned = lightClean(src);
+            if (codeView) setCodeText(cleaned);
+            else { onBodyChange(cleaned); if (bodyRef.current) bodyRef.current.innerHTML = cleaned; }
+          }}><Eraser size={14} /></ToolBtn>
           <div className="flex-1" />
           <ToolBtn title={codeView ? "Visual editor" : "HTML code view"} active={codeView} onClick={() => {
             if (codeView) {
@@ -476,7 +502,7 @@ export const RichEmailEditor = forwardRef<RichEmailEditorHandle, RichEmailEditor
 
           {/* Variable popover */}
           {popover === "variable" && (
-            <div className="absolute z-20 top-full left-0 mt-1 p-3 rounded-lg border border-slate-200 bg-white shadow-lg w-80 max-h-80 overflow-auto" role="dialog" aria-label="Insert variable">
+            <div className="absolute z-20 bottom-full left-0 mb-1 p-3 rounded-lg border border-slate-200 bg-white shadow-lg w-[420px] max-h-80 overflow-auto" role="dialog" aria-label="Insert variable">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-xs font-semibold text-slate-600">Insert variable</span>
                 <button type="button" onClick={() => setPopover(null)} aria-label="Close"><X size={13} /></button>
@@ -484,10 +510,11 @@ export const RichEmailEditor = forwardRef<RichEmailEditorHandle, RichEmailEditor
               <label className="text-xs text-slate-500 block mb-1">Fallback value (used when a lead has no data)</label>
               <input value={varFallback} onChange={(e) => setVarFallback(e.target.value)} placeholder='e.g. "there"'
                 className="w-full text-xs border border-slate-200 rounded-md px-2 py-1.5 mb-2" aria-label="Variable fallback" />
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-2 gap-1 min-w-0">
                 {variables.map((v) => (
                   <button key={v} type="button" onClick={() => insertVariable(v)}
-                    className="text-left text-xs font-mono px-2 py-1.5 rounded-md hover:bg-violet-50 hover:text-violet-700 text-slate-700">
+                    className="min-w-0 text-left text-[11px] font-mono px-2 py-1.5 rounded-md hover:bg-violet-50 hover:text-violet-700 text-slate-700 truncate"
+                    title={`{{${v}}}`}>
                     {`{{${v}}}`}
                   </button>
                 ))}
