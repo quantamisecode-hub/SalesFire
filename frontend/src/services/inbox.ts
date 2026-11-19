@@ -146,6 +146,11 @@ export const inboxService = {
     return api.get(`/conversations/unread-count`);
   },
 
+  // Per-folder counts for the mailbox sidebar (SmartLead-style badges).
+  async counts(): Promise<{ data: Record<string, number> }> {
+    return api.get(`/conversations/counts`);
+  },
+
   async sendReply(id: string, payload: {
     subject?: string; bodyText?: string; bodyHtml?: string;
     toEmails?: string[]; ccEmails?: string[]; bccEmails?: string[];

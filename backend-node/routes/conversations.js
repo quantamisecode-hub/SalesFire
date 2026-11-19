@@ -232,6 +232,49 @@ router.get('/unread-count', async (req, res) => {
   }
 });
 
+// GET /counts — per-folder counts for the mailbox sidebar (SmartLead-style
+// folder badges). One request covers every folder; mirrors buildListWhere.
+router.get('/counts', async (req, res) => {
+  try {
+    const org = req.user.org;
+    const now = new Date();
+    const base = { organizationId: org };
+    const folders = {
+      all: { ...base, isArchived: false, [Op.or]: [{ snoozedUntil: null }, { snoozedUntil: { [Op.lte]: now } }] },
+      starred: { ...base, isStarred: true },
+      replied: { ...base, status: 'waiting_for_reply' },
+      snoozed: { ...base, snoozedUntil: { [Op.gt]: now } },
+      archived: { ...base, isArchived: true },
+      mine: { ...base, assignedUserId: req.user.id },
+      needs_reply: { ...base, status: 'needs_reply' },
+      assigned: { ...base, assignedUserId: { [Op.ne]: null } },
+      closed: { ...base, status: 'closed' },
+    };
+    const counts = {};
+    await Promise.all(
+      Object.entries(folders).map(async ([key, where]) => {
+        counts[key] = await Conversation.count({ where });
+      })
+    );
+    // Unread folder = conversations with at least one unread inbound message
+    // (same definition the list route uses for filter=unread).
+    const unreadRows = await EmailMessage.findAll({
+      where: { organizationId: org, direction: 'inbound', isRead: false },
+      attributes: ['conversationId'],
+      group: ['conversationId'],
+      raw: true,
+    });
+    const unreadIds = unreadRows.map((r) => r.conversationId);
+    counts.unread = unreadIds.length
+      ? await Conversation.count({ where: { organizationId: org, id: { [Op.in]: unreadIds } } })
+      : 0;
+    res.json({ success: true, data: counts });
+  } catch (error) {
+    console.error('Folder counts error:', error);
+    res.status(500).json({ error: 'Failed to compute folder counts' });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // GET /:id — detail with messages
 // ---------------------------------------------------------------------------

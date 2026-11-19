@@ -118,6 +118,12 @@ async function serializeAccount(account, { withUsage } = {}) {
     security: account.security,
     smtpUsername: account.smtpUsername,
     hasPassword: Boolean(account.smtpPasswordEncrypted), // never the password itself
+    imapEnabled: Boolean(account.imapEnabled),
+    imapHost: account.imapHost,
+    imapPort: account.imapPort,
+    imapSecure: account.imapSecure !== false,
+    imapUsername: account.imapUsername,
+    hasImapPassword: Boolean(account.imapPasswordEncrypted), // never the password itself
     fromEmail: account.fromEmail,
     fromName: account.fromName,
     replyToEmail: account.replyToEmail,
@@ -269,6 +275,7 @@ router.post('/accounts', requirePrivileged, async (req, res) => {
       fromEmail, fromName, replyToEmail, dailyLimit, hourlyLimit,
       minDelayMinutes, maxDelayMinutes, minimumWaitMinutes, timezone, sendingSchedule,
       warmupDailyLimit,
+      imapEnabled, imapHost, imapPort, imapSecure, imapUsername, imapPassword,
     } = req.body || {};
 
     if (!name || !smtpHost || !smtpPort || !fromEmail) {
@@ -279,6 +286,11 @@ router.post('/accounts', requirePrivileged, async (req, res) => {
     }
     const { errors } = validateAccountInput(req.body, { partial: false });
     if (errors.length) return res.status(422).json({ error: errors.join('. ') });
+    // Reply-sync (IMAP) must be fully configured when enabled — the sync
+    // worker fails closed on missing host/user/password.
+    if (imapEnabled && (!imapHost || !imapUsername || !imapPassword)) {
+      return res.status(422).json({ error: 'imapHost, imapUsername and imapPassword are required when reply sync is enabled' });
+    }
 
     const scheduleCheck = validateSchedule(sendingSchedule === undefined ? null : sendingSchedule);
     const account = await models.SmtpAccount.create({
@@ -288,7 +300,9 @@ router.post('/accounts', requirePrivileged, async (req, res) => {
       smtpHost,
       smtpPort: parseInt(smtpPort, 10) || 587,
       security: SECURITY_MODES.includes(security) ? security : 'tls',
-      smtpUsername: smtpUsername || null,
+      // Blank username means "use the from address" (wizard copy) — store the
+      // resolved value so the list shows what we actually authenticate with.
+      smtpUsername: smtpUsername || fromEmail,
       smtpPasswordEncrypted: smtpPassword ? encryptSecret(smtpPassword) : null,
       fromEmail,
       fromName: fromName || null,
@@ -301,6 +315,12 @@ router.post('/accounts', requirePrivileged, async (req, res) => {
       timezone: timezone || 'UTC',
       sendingSchedule: scheduleCheck.ok ? scheduleCheck.value : null,
       warmupDailyLimit: warmupDailyLimit ? parseInt(warmupDailyLimit, 10) : null,
+      imapEnabled: Boolean(imapEnabled),
+      imapHost: imapHost || null,
+      imapPort: parseInt(imapPort, 10) || 993,
+      imapSecure: imapSecure !== false,
+      imapUsername: imapUsername || null,
+      imapPasswordEncrypted: imapPassword ? encryptSecret(imapPassword) : null,
       isEnabled: true,
       status: 'unverified',
       healthStatus: 'unknown',
@@ -347,6 +367,16 @@ router.patch('/accounts/:id', requirePrivileged, async (req, res) => {
     if (req.body.smtpPort !== undefined) account.smtpPort = parseInt(req.body.smtpPort, 10) || 587;
     if (req.body.smtpUsername !== undefined) account.smtpUsername = req.body.smtpUsername;
     if (req.body.smtpPassword) account.smtpPasswordEncrypted = encryptSecret(req.body.smtpPassword);
+    // Reply-sync (IMAP) settings — password is write-only like SMTP's.
+    if (req.body.imapEnabled !== undefined) account.imapEnabled = Boolean(req.body.imapEnabled);
+    if (req.body.imapHost !== undefined) account.imapHost = req.body.imapHost || null;
+    if (req.body.imapPort !== undefined) account.imapPort = parseInt(req.body.imapPort, 10) || 993;
+    if (req.body.imapSecure !== undefined) account.imapSecure = Boolean(req.body.imapSecure);
+    if (req.body.imapUsername !== undefined) account.imapUsername = req.body.imapUsername || null;
+    if (req.body.imapPassword) account.imapPasswordEncrypted = encryptSecret(req.body.imapPassword);
+    if (account.imapEnabled && (!account.imapHost || !account.imapUsername || !account.imapPasswordEncrypted)) {
+      return res.status(422).json({ error: 'imapHost, imapUsername and imapPassword are required when reply sync is enabled' });
+    }
     if (req.body.isEnabled !== undefined) account.isEnabled = Boolean(req.body.isEnabled);
     if (req.body.dailyLimit !== undefined) account.dailyLimit = mergedDaily;
     if (req.body.hourlyLimit !== undefined) account.hourlyLimit = mergedHourly;

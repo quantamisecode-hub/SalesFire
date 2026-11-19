@@ -1,40 +1,33 @@
-// ConversationList — left pane of the unified inbox.
-// Instantly-style compact rows: unread dot, sender, company, subject, snippet,
-// relative time, campaign + account context. Search + filter chips; server-side
-// pagination and debounced search.
+// ConversationList — mailbox list pane of the unified inbox.
+// Folder filtering lives in the MailboxSidebar; this pane owns search, sort
+// (Smartlead-style: latest reply / unread first / oldest) and pagination.
+// Rows: subject-forward email-list density — sender, subject, snippet,
+// relative time, campaign + account context.
 import { Search, Inbox, Star, Archive, X } from "lucide-react";
 import type { InboxConversationListItem } from "@/services/inbox";
 import { StatusDot } from "@/components/leads/StatusDot";
 import { timeAgo, initialsOf, avatarHue } from "@/lib/time";
 
-export type InboxFilter =
-  | "all" | "unread" | "mine" | "assigned" | "starred"
-  | "needs_reply" | "replied" | "closed" | "snoozed" | "archived";
+export type InboxSort = "last_message_at" | "unread" | "oldest";
 
-const FILTERS: Array<{ value: InboxFilter; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "unread", label: "Unread" },
-  { value: "mine", label: "Mine" },
-  { value: "assigned", label: "Assigned" },
-  { value: "starred", label: "Starred" },
-  { value: "needs_reply", label: "Needs Reply" },
-  { value: "replied", label: "Replied" },
-  { value: "closed", label: "Closed" },
-  { value: "snoozed", label: "Snoozed" },
-  { value: "archived", label: "Archived" },
+const SORTS: Array<{ value: InboxSort; label: string }> = [
+  { value: "last_message_at", label: "Latest reply" },
+  { value: "unread", label: "Unread first" },
+  { value: "oldest", label: "Oldest" },
 ];
 
 export function ConversationList({
-  conversations, selectedId, onSelect, filter, onFilterChange, search, onSearchChange,
+  conversations, selectedId, onSelect, search, onSearchChange,
+  sort, onSortChange,
   page, pages, total, onPageChange, isLoading, error, onRetry,
 }: {
   conversations: InboxConversationListItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  filter: InboxFilter;
-  onFilterChange: (f: InboxFilter) => void;
   search: string;
   onSearchChange: (s: string) => void;
+  sort: InboxSort;
+  onSortChange: (s: InboxSort) => void;
   page: number; pages: number; total: number;
   onPageChange: (p: number) => void;
   isLoading: boolean;
@@ -42,8 +35,8 @@ export function ConversationList({
   onRetry: () => void;
 }) {
   return (
-    <section aria-label="Conversations" className="flex h-full min-h-0 flex-col border-r border-slate-200 bg-slate-50/40">
-      {/* Search */}
+    <section aria-label="Conversations" className="flex h-full min-h-0 flex-col border-r border-slate-200 bg-white">
+      {/* Search + sort */}
       <div className="border-b border-slate-200 p-2.5">
         <div className="relative">
           <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden />
@@ -62,24 +55,19 @@ export function ConversationList({
             </button>
           )}
         </div>
-        {/* Filter chips */}
-        <div className="mt-2 flex gap-1 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Inbox filters">
-          {FILTERS.map((f) => (
-            <button
-              key={f.value}
-              role="tab"
-              aria-selected={filter === f.value}
-              onClick={() => onFilterChange(f.value)}
-              className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-                filter === f.value
-                  ? "bg-primary text-white shadow-sm"
-                  : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-100 hover:text-slate-800"
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <label className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-400">
+          Sort
+          <select
+            value={sort}
+            onChange={(e) => onSortChange(e.target.value as InboxSort)}
+            aria-label="Sort conversations"
+            className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[12px] font-medium text-slate-600 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+          >
+            {SORTS.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* List */}
@@ -109,6 +97,7 @@ export function ConversationList({
           conversations.map((c) => {
             const active = c.id === selectedId;
             const name = c.lead ? [c.lead.firstName, c.lead.lastName].filter(Boolean).join(" ") || c.lead.email : "Unknown sender";
+            const subject = c.subject || "(no subject)";
             return (
               <button
                 key={c.id}
@@ -116,46 +105,38 @@ export function ConversationList({
                 aria-selected={active}
                 onClick={() => onSelect(c.id)}
                 className={`block w-full border-b border-slate-100 px-3 py-2.5 text-left transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
-                  active ? "bg-indigo-50/70" : "hover:bg-slate-100/70"
+                  active ? "bg-primary-50/70" : "hover:bg-slate-50"
                 }`}
               >
-                <div className="flex items-start gap-2.5">
-                  {/* Avatar */}
-                  <span
-                    aria-hidden
-                    className="mt-0.5 flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                <div className="flex items-baseline gap-2">
+                  {c.unread > 0 && <span aria-label={`${c.unread} unread`} className="mt-1 h-2 w-2 shrink-0 self-center rounded-full bg-primary" />}
+                  <span className={`min-w-0 truncate text-[13px] ${c.unread > 0 ? "font-semibold text-slate-900" : "font-medium text-slate-700"}`}>
+                    {name}
+                  </span>
+                  {c.isStarred && <Star size={11} className="shrink-0 fill-amber-400 text-amber-400" aria-label="Starred" />}
+                  {c.isArchived && <Archive size={11} className="shrink-0 text-slate-400" aria-label="Archived" />}
+                  <span className="ml-auto shrink-0 text-[10px] tabular-nums text-slate-400">
+                    {timeAgo(c.lastMessageAt)}
+                  </span>
+                </div>
+                <p className={`mt-0.5 truncate text-[12.5px] text-slate-800 ${c.unread > 0 ? "font-semibold" : "font-medium"}`}>
+                  {subject}
+                </p>
+                {c.snippet && (
+                  <p className="mt-0.5 truncate text-[11.5px] text-slate-400">{c.snippet}</p>
+                )}
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 select-none items-center justify-center rounded-full text-[8px] font-semibold text-white"
                     style={{ backgroundColor: `hsl(${avatarHue(c.lead?.email || c.id)} 40% 52%)` }}
-                  >
+                    aria-hidden>
                     {initialsOf(name, c.lead?.email)}
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      {c.unread > 0 && <span aria-label={`${c.unread} unread`} className="h-2 w-2 shrink-0 rounded-full bg-primary" />}
-                      <span className={`truncate text-[13px] ${c.unread > 0 ? "font-semibold text-slate-900" : "font-medium text-slate-700"}`}>
-                        {name}
-                      </span>
-                      {c.isStarred && <Star size={11} className="shrink-0 fill-amber-400 text-amber-400" aria-label="Starred" />}
-                      {c.isArchived && <Archive size={11} className="shrink-0 text-slate-400" aria-label="Archived" />}
-                      <span className="ml-auto shrink-0 text-[10px] tabular-nums text-slate-400">
-                        {timeAgo(c.lastMessageAt)}
-                      </span>
+                  {c.campaignName && (
+                    <span className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                      {c.campaignName}
                     </span>
-                    <span className="mt-0.5 block truncate text-[11px] font-medium text-slate-500">
-                      {c.lead?.companyName || "—"}
-                    </span>
-                    <span className="mt-0.5 block truncate text-[12px] text-slate-600">{c.subject}</span>
-                    {c.snippet && (
-                      <span className="mt-0.5 block truncate text-[11px] text-slate-400">{c.snippet}</span>
-                    )}
-                    <span className="mt-1 flex items-center gap-2">
-                      {c.campaignName && (
-                        <span className="truncate text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                          {c.campaignName}
-                        </span>
-                      )}
-                      <StatusDot status={c.status} />
-                    </span>
-                  </span>
+                  )}
+                  <StatusDot status={c.status} />
                 </div>
               </button>
             );

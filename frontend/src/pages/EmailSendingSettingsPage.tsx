@@ -2,93 +2,42 @@
 // Real data only: every number comes from the backend (usage, health,
 // capacity). Passwords are write-only (AES-256-GCM at rest); SMTP tests and
 // test emails are real SMTP operations, never simulated.
-import { useState, useEffect, useCallback } from "react";
+// Account creation/editing runs through AddAccountWizard (SalesBlink-style
+// Provider → Connect → Sending → Warmup → Done stepper with provider presets).
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Plus, Mail, Pencil, Trash2, PlugZap, Send, Power,
-  RefreshCw, CheckCircle2, XCircle, Loader2, KeyRound, CircleDot,
-  ChevronLeft, ChevronRight, Gauge, CalendarClock,
+  RefreshCw, CheckCircle2, XCircle, Loader2, CircleDot, Search,
 } from "lucide-react";
 import { emailSendingService, type SendingOverview, type AccountUsage } from "@/services/emailSending";
 import { inboxService, type SyncAccountStatus } from "@/services/inbox";
 import { WarmupPanel } from "@/components/WarmupPanel";
+import { AddAccountWizard } from "@/components/sending/AddAccountWizard";
 import { signatureService, type EmailSignature } from "@/services/signature";
 import { Badge } from "@/components/Badge";
 import { useConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
-import type { SmtpAccount, SmtpTestResult, PerDayWindow } from "@/types/prompt6";
+import type { SmtpAccount, SmtpTestResult } from "@/types/prompt6";
 
-type FormState = {
-  name: string;
-  smtpHost: string;
-  smtpPort: string;
-  security: "none" | "tls" | "ssl";
-  smtpUsername: string;
-  smtpPassword: string;
-  fromEmail: string;
-  fromName: string;
-  replyToEmail: string;
-  dailyLimit: string;
-  hourlyLimit: string;
-  minDelayMinutes: string;
-  maxDelayMinutes: string;
-  minimumWaitMinutes: string;
-  warmupDailyLimit: string;
-  timezone: string;
-  scheduleEnabled: boolean;
-  sendingSchedule: Record<string, PerDayWindow>;
-  signatureMode: "inherit" | "custom" | "none";
-  signatureId: string;
-};
-
-const TIMEZONES = [
-  "UTC", "America/New_York", "America/Chicago", "America/Los_Angeles",
-  "America/Toronto", "Europe/London", "Europe/Berlin", "Europe/Madrid",
-  "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney",
+/** SalesBlink-style status tabs over the account list. */
+type AccountTab = "all" | "ready" | "error" | "disabled" | "warmup";
+const ACCOUNT_TABS: Array<{ value: AccountTab; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "ready", label: "Ready for outreach" },
+  { value: "error", label: "Has error" },
+  { value: "disabled", label: "Paused" },
+  { value: "warmup", label: "Warmup active" },
 ];
-const DAY_NAMES: Record<string, string> = {
-  "1": "Monday", "2": "Tuesday", "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday", "7": "Sunday",
-};
-const defaultSchedule = (): Record<string, PerDayWindow> => Object.fromEntries(
-  ["1", "2", "3", "4", "5", "6", "7"].map((d) => [
-    d,
-    { enabled: !["6", "7"].includes(d), start: "09:00", end: "17:00" },
-  ]),
-);
 
-const EMPTY_FORM: FormState = {
-  name: "", smtpHost: "", smtpPort: "587", security: "tls",
-  smtpUsername: "", smtpPassword: "", fromEmail: "", fromName: "",
-  replyToEmail: "", dailyLimit: "", hourlyLimit: "",
-  minDelayMinutes: "0", maxDelayMinutes: "0", minimumWaitMinutes: "1", warmupDailyLimit: "",
-  timezone: "UTC", scheduleEnabled: false, sendingSchedule: defaultSchedule(),
-  signatureMode: "inherit", signatureId: "",
-};
-
-function toForm(a: SmtpAccount): FormState {
-  const schedule = a.sendingSchedule ?? null;
-  return {
-    name: a.name, smtpHost: a.smtpHost, smtpPort: String(a.smtpPort),
-    security: a.security, smtpUsername: a.smtpUsername || "",
-    smtpPassword: "",
-    fromEmail: a.fromEmail, fromName: a.fromName || "",
-    replyToEmail: a.replyToEmail || "",
-    dailyLimit: a.dailyLimit != null ? String(a.dailyLimit) : "",
-    hourlyLimit: a.hourlyLimit != null ? String(a.hourlyLimit) : "",
-    minDelayMinutes: a.minDelayMinutes != null ? String(a.minDelayMinutes) : "0",
-    maxDelayMinutes: a.maxDelayMinutes != null ? String(a.maxDelayMinutes) : "0",
-    minimumWaitMinutes: a.minimumWaitMinutes != null ? String(a.minimumWaitMinutes) : "1",
-    warmupDailyLimit: a.warmupDailyLimit != null ? String(a.warmupDailyLimit) : "",
-    timezone: a.timezone || "UTC",
-    scheduleEnabled: Boolean(schedule),
-    sendingSchedule: schedule ? { ...defaultSchedule(), ...schedule } : defaultSchedule(),
-    signatureMode: (a.signatureMode as FormState["signatureMode"]) || "inherit",
-    signatureId: a.signatureId || "",
-  };
+function tabMatches(a: SmtpAccount, tab: AccountTab): boolean {
+  switch (tab) {
+    case "ready": return a.isEnabled && a.status === "verified" && a.healthStatus !== "critical";
+    case "error": return a.status === "error" || a.healthStatus === "critical";
+    case "disabled": return !a.isEnabled;
+    case "warmup": return a.warmupStatus === "active" || a.warmupStatus === "warming";
+    default: return true;
+  }
 }
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-const WIZARD_STEPS = ["Account Details", "SMTP Configuration", "Sending Limits", "Schedule", "Test & Complete"];
 
 export function EmailSendingSettingsPage() {
   const [accounts, setAccounts] = useState<SmtpAccount[]>([]);
@@ -97,14 +46,12 @@ export function EmailSendingSettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [wizardStep, setWizardStep] = useState(1);
-  const [createdId, setCreatedId] = useState<string | null>(null);
-  const [createdTest, setCreatedTest] = useState<SmtpTestResult | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [isSaving, setIsSaving] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardMode, setWizardMode] = useState<"create" | "edit">("create");
+  const [editingAccount, setEditingAccount] = useState<SmtpAccount | null>(null);
+
+  const [tab, setTab] = useState<AccountTab>("all");
+  const [search, setSearch] = useState("");
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, SmtpTestResult>>({});
@@ -153,31 +100,16 @@ export function EmailSendingSettingsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const closeForm = () => {
-    setShowForm(false);
-    setWizardStep(1);
-    setCreatedId(null);
-    setCreatedTest(null);
-  };
-
   const openCreate = () => {
-    setEditingId(null);
-    setWizardStep(1);
-    setCreatedId(null);
-    setCreatedTest(null);
-    setForm(EMPTY_FORM);
-    setFormErrors({});
-    setShowForm(true);
+    setWizardMode("create");
+    setEditingAccount(null);
+    setWizardOpen(true);
   };
 
   const openEdit = (a: SmtpAccount) => {
-    setEditingId(a.id);
-    setWizardStep(1);
-    setCreatedId(null);
-    setCreatedTest(null);
-    setForm(toForm(a));
-    setFormErrors({});
-    setShowForm(true);
+    setWizardMode("edit");
+    setEditingAccount(a);
+    setWizardOpen(true);
   };
 
   const openDrawer = async (id: string) => {
@@ -191,123 +123,6 @@ export function EmailSendingSettingsPage() {
       setUsage(null);
     } finally {
       setUsageLoading(false);
-    }
-  };
-
-  // Cross-field validation shared by all steps (§13, §14).
-  const buildErrors = (): Record<string, string> => {
-    const errors: Record<string, string> = {};
-    if (!form.name.trim()) errors.name = "Account name is required";
-    if (!form.smtpHost.trim()) errors.smtpHost = "SMTP host is required";
-    const port = parseInt(form.smtpPort, 10);
-    if (!form.smtpPort || Number.isNaN(port) || port <= 0 || port > 65535) {
-      errors.smtpPort = "Port must be 1-65535";
-    }
-    if (!form.fromEmail.trim() || !EMAIL_RE.test(form.fromEmail)) {
-      errors.fromEmail = "A valid from email is required";
-    }
-    if (form.replyToEmail && !EMAIL_RE.test(form.replyToEmail)) {
-      errors.replyToEmail = "Reply-To must be a valid email address";
-    }
-    if (!editingId && !form.smtpPassword) {
-      errors.smtpPassword = "Password is required for a new account";
-    }
-    const daily = form.dailyLimit ? parseInt(form.dailyLimit, 10) : null;
-    const hourly = form.hourlyLimit ? parseInt(form.hourlyLimit, 10) : null;
-    if (daily != null && (Number.isNaN(daily) || daily < 1)) errors.dailyLimit = "Must be a positive integer";
-    if (hourly != null && (Number.isNaN(hourly) || hourly < 1)) errors.hourlyLimit = "Must be a positive integer";
-    if (daily != null && hourly != null && hourly > daily) {
-      errors.hourlyLimit = "Hourly limit cannot exceed daily limit";
-    }
-    const minD = parseInt(form.minDelayMinutes || "0", 10);
-    const maxD = parseInt(form.maxDelayMinutes || "0", 10);
-    const minW = parseInt(form.minimumWaitMinutes || "1", 10);
-    if (Number.isNaN(minW) || minW < 0) errors.minimumWaitMinutes = "Must be 0 or more";
-    if (Number.isNaN(minD) || minD < 0) errors.minDelayMinutes = "Must be 0 or more";
-    if (Number.isNaN(maxD) || maxD < 0) errors.maxDelayMinutes = "Must be 0 or more";
-    if (!Number.isNaN(minD) && !Number.isNaN(maxD) && minD > maxD) {
-      errors.maxDelayMinutes = "Maximum delay cannot be less than minimum delay";
-    }
-    if (form.scheduleEnabled) {
-      for (const [day, window] of Object.entries(form.sendingSchedule)) {
-        if (!window.enabled) continue;
-        if (!HHMM_RE.test(window.start) || !HHMM_RE.test(window.end)) {
-          errors[`schedule-${day}`] = `${DAY_NAMES[day]} hours must be HH:MM`;
-        } else if (window.start >= window.end) {
-          errors[`schedule-${day}`] = `${DAY_NAMES[day]}: start must be before end`;
-        }
-      }
-    }
-    return errors;
-  };
-
-  const validate = (): boolean => {
-    const errors = buildErrors();
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  /** Validate only the fields visible on a given wizard step. */
-  const validateStep = (step: number): boolean => {
-    const errors = buildErrors();
-    setFormErrors(errors);
-    const stepFields: Record<number, string[]> = {
-      1: ["name", "fromEmail", "replyToEmail"],
-      2: ["smtpHost", "smtpPort", "smtpPassword"],
-      3: ["dailyLimit", "hourlyLimit", "minDelayMinutes", "maxDelayMinutes", "minimumWaitMinutes"],
-      4: ["schedule-1", "schedule-2", "schedule-3", "schedule-4", "schedule-5", "schedule-6", "schedule-7"],
-    };
-    return !Object.keys(errors).some((k) => (stepFields[step] || []).includes(k));
-  };
-
-  const payloadOf = () => ({
-    name: form.name.trim(),
-    smtpHost: form.smtpHost.trim(),
-    smtpPort: parseInt(form.smtpPort, 10),
-    security: form.security,
-    smtpUsername: form.smtpUsername || undefined,
-    smtpPassword: form.smtpPassword || undefined,
-    fromEmail: form.fromEmail.trim(),
-    fromName: form.fromName || undefined,
-    replyToEmail: form.replyToEmail || undefined,
-    dailyLimit: form.dailyLimit ? parseInt(form.dailyLimit, 10) : undefined,
-    hourlyLimit: form.hourlyLimit ? parseInt(form.hourlyLimit, 10) : undefined,
-    minDelayMinutes: form.minDelayMinutes ? parseInt(form.minDelayMinutes, 10) : 0,
-    maxDelayMinutes: form.maxDelayMinutes ? parseInt(form.maxDelayMinutes, 10) : 0,
-    minimumWaitMinutes: form.minimumWaitMinutes !== "" ? Math.max(0, parseInt(form.minimumWaitMinutes, 10) || 0) : 1,
-    warmupDailyLimit: form.warmupDailyLimit ? parseInt(form.warmupDailyLimit, 10) : null,
-    timezone: form.timezone,
-    sendingSchedule: form.scheduleEnabled ? form.sendingSchedule : null,
-    signatureMode: form.signatureMode,
-    signatureId: form.signatureMode === "custom" ? form.signatureId || null : null,
-  });
-
-  const save = async () => {
-    if (!validate()) return;
-    setIsSaving(true);
-    try {
-      const payload = payloadOf();
-      if (editingId) {
-        await emailSendingService.updateAccount(editingId, payload);
-        toast.success(`"${payload.name}" updated.`);
-        closeForm();
-        await load();
-      } else {
-        const res = await emailSendingService.createAccount(payload);
-        setCreatedId(res.data.id);
-        // Step 5: immediately run a real SMTP handshake and show the honest result.
-        try {
-          const test = await emailSendingService.testConnection(res.data.id);
-          setCreatedTest(test);
-        } catch {
-          setCreatedTest({ success: false, message: "SMTP connection test failed to run." });
-        }
-        await load();
-      }
-    } catch (err: any) {
-      toast.error(err?.data?.error || err?.message || "Failed to save the account.");
-    } finally {
-      setIsSaving(false);
     }
   };
 
@@ -472,20 +287,21 @@ export function EmailSendingSettingsPage() {
     return <Badge status="unverified" />;
   };
 
-  const setDay = (day: string, patch: Partial<PerDayWindow>) => {
-    setForm((prev) => ({
-      ...prev,
-      sendingSchedule: {
-        ...prev.sendingSchedule,
-        [day]: { ...prev.sendingSchedule[day], ...patch },
-      },
-    }));
-  };
+  // SalesBlink-style status tabs + search over the account list.
+  const filteredAccounts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return accounts.filter((a) => {
+      if (!tabMatches(a, tab)) return false;
+      if (!q) return true;
+      return (
+        a.fromEmail.toLowerCase().includes(q) ||
+        a.name.toLowerCase().includes(q) ||
+        (a.fromName || "").toLowerCase().includes(q)
+      );
+    });
+  }, [accounts, tab, search]);
 
-  const isCreate = !editingId;
-  const activeWizardStep = isCreate ? wizardStep : 0;
-  const showStep = (n: number) => !isCreate || activeWizardStep === n;
-  const createdAccount = createdId ? accounts.find((a) => a.id === createdId) : undefined;
+  const tabCount = (t: AccountTab) => accounts.filter((a) => tabMatches(a, t)).length;
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-5" data-testid="email-sending-settings">
@@ -522,272 +338,65 @@ export function EmailSendingSettingsPage() {
         <OverviewCard label="Accounts with errors" value={overview?.accountsWithErrors ?? accounts.filter((a) => a.status === "error").length} tone={(overview?.accountsWithErrors ?? 0) > 0 ? "bad" : undefined} />
       </div>
 
-      {/* Account form / wizard */}
-      {showForm && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 max-h-[88vh] overflow-y-auto" role="form" aria-label="Sending account form">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              {isCreate ? "Add Sending Account" : "Edit Sending Account"}
-            </h2>
-            {isCreate && (
-              <ol className="flex items-center gap-1.5 text-xs" aria-label="Setup progress">
-                {WIZARD_STEPS.map((label, i) => {
-                  const n = i + 1;
-                  const done = createdId ? true : n < wizardStep;
-                  const current = !createdId && n === wizardStep;
-                  return (
-                    <li key={label} className="flex items-center gap-1.5">
-                      <span className={`w-6 h-6 rounded-full border flex items-center justify-center text-[10px] font-semibold ${
-                        done ? "bg-primary text-white border-primary"
-                        : current ? "bg-white text-primary border-primary"
-                        : "bg-white text-slate-400 border-slate-300"
-                      }`}>{done ? "✓" : n}</span>
-                      <span className={`hidden md:inline ${current ? "text-slate-800 font-medium" : "text-slate-400"}`}>{label}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-            )}
-          </div>
-
-          {/* Stepper gate for create mode; edit mode shows all sections */}
-          {showStep(1) && (
-            <fieldset className="space-y-4">
-              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 flex items-center gap-1.5"><CircleDot size={12} /> Account details</legend>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Account Name" error={formErrors.name}>
-                  <input className={inputCls(formErrors.name)} value={form.name} autoFocus
-                    onChange={(e) => setForm({ ...form, name: e.target.value, fromName: form.fromName === form.name ? e.target.value : form.fromName })}
-                    placeholder="Prateek Sales" />
-                </Field>
-                <Field label="From Email" error={formErrors.fromEmail}>
-                  <input className={inputCls(formErrors.fromEmail)} value={form.fromEmail}
-                    onChange={(e) => setForm({ ...form, fromEmail: e.target.value })} placeholder="sales@yourdomain.com" />
-                </Field>
-                <Field label="From Name">
-                  <input className={inputCls()} value={form.fromName}
-                    onChange={(e) => setForm({ ...form, fromName: e.target.value })} placeholder={form.name || "Prateek Shukla"} />
-                </Field>
-                <Field label="Reply-To" error={formErrors.replyToEmail}>
-                  <input className={inputCls(formErrors.replyToEmail)} value={form.replyToEmail}
-                    onChange={(e) => setForm({ ...form, replyToEmail: e.target.value })} placeholder="replies@yourdomain.com" />
-                </Field>
-                <Field label="Signature">
-                  <select className={inputCls()} value={`${form.signatureMode}${form.signatureMode === "custom" ? `:${form.signatureId}` : ""}`}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "inherit") setForm({ ...form, signatureMode: "inherit", signatureId: "" });
-                      else if (v === "none") setForm({ ...form, signatureMode: "none", signatureId: "" });
-                      else if (v.startsWith("custom:")) setForm({ ...form, signatureMode: "custom", signatureId: v.slice(7) });
-                    }}>
-                    <option value="inherit">Inherit org default</option>
-                    {signatures.map((s) => (
-                      <option key={s.id} value={`custom:${s.id}`}>Custom — {s.name}</option>
-                    ))}
-                    <option value="none">No signature</option>
-                  </select>
-                </Field>
-              </div>
-            </fieldset>
-          )}
-
-          {showStep(2) && (
-            <fieldset className="space-y-4 mt-5">
-              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 flex items-center gap-1.5"><KeyRound size={12} /> SMTP configuration</legend>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="SMTP Host" error={formErrors.smtpHost}>
-                  <input className={inputCls(formErrors.smtpHost)} value={form.smtpHost}
-                    onChange={(e) => setForm({ ...form, smtpHost: e.target.value })} placeholder="mail.yourdomain.com" />
-                </Field>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Port" error={formErrors.smtpPort}>
-                    <input type="number" className={inputCls(formErrors.smtpPort)} value={form.smtpPort}
-                      onChange={(e) => setForm({ ...form, smtpPort: e.target.value })} />
-                  </Field>
-                  <Field label="Security">
-                    <select className={inputCls()} value={form.security}
-                      onChange={(e) => setForm({ ...form, security: e.target.value as FormState["security"] })}>
-                      <option value="tls">STARTTLS (587)</option>
-                      <option value="ssl">SSL/TLS (465)</option>
-                      <option value="none">None (insecure)</option>
-                    </select>
-                  </Field>
-                </div>
-                {form.security === "none" && (
-                  <p className="md:col-span-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="alert">
-                    Plain SMTP sends credentials and mail unencrypted. Only use this on a trusted private relay. STARTTLS or SSL/TLS is strongly recommended.
-                  </p>
-                )}
-                <Field label="Username">
-                  <input className={inputCls()} value={form.smtpUsername} autoComplete="off"
-                    onChange={(e) => setForm({ ...form, smtpUsername: e.target.value })} />
-                </Field>
-                <Field label={editingId ? "Password (leave blank to keep)" : "Password"} error={formErrors.smtpPassword}>
-                  <input type="password" className={inputCls(formErrors.smtpPassword)} value={form.smtpPassword}
-                    autoComplete="new-password" placeholder="••••••••"
-                    onChange={(e) => setForm({ ...form, smtpPassword: e.target.value })} />
-                </Field>
-              </div>
-            </fieldset>
-          )}
-
-          {showStep(3) && (
-            <fieldset className="space-y-4 mt-5">
-              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 flex items-center gap-1.5"><Gauge size={12} /> Sending limits</legend>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <Field label="Daily campaign limit" error={formErrors.dailyLimit}>
-                  <input type="number" min={1} className={inputCls(formErrors.dailyLimit)} value={form.dailyLimit}
-                    onChange={(e) => setForm({ ...form, dailyLimit: e.target.value })} placeholder="30" />
-                </Field>
-                <Field label="Hourly Limit" error={formErrors.hourlyLimit}>
-                  <input type="number" min={1} className={inputCls(formErrors.hourlyLimit)} value={form.hourlyLimit}
-                    onChange={(e) => setForm({ ...form, hourlyLimit: e.target.value })} placeholder="10" />
-                </Field>
-                <Field label="Min Delay (min)" error={formErrors.minDelayMinutes}>
-                  <input type="number" min={0} className={inputCls(formErrors.minDelayMinutes)} value={form.minDelayMinutes}
-                    onChange={(e) => setForm({ ...form, minDelayMinutes: e.target.value })} />
-                </Field>
-                <Field label="Max Delay (min)" error={formErrors.maxDelayMinutes}>
-                  <input type="number" min={0} className={inputCls(formErrors.maxDelayMinutes)} value={form.maxDelayMinutes}
-                    onChange={(e) => setForm({ ...form, maxDelayMinutes: e.target.value })} />
-                </Field>
-                <Field label="Minimum wait (min)" error={formErrors.minimumWaitMinutes}>
-                  <input type="number" min={0} className={inputCls(formErrors.minimumWaitMinutes)} value={form.minimumWaitMinutes}
-                    onChange={(e) => setForm({ ...form, minimumWaitMinutes: e.target.value })} />
-                </Field>
-              </div>
-              <p className="text-xs text-slate-400">
-                Daily campaign limit applies across all campaigns this account is pooled into (Instantly: 30/day per account recommended).
-                Hourly cannot exceed daily; minimum delay cannot exceed maximum delay; minimum wait is the gap between two sends from this account.
-              </p>
-              <Field label="Warm-up daily limit (optional)">
-                <input type="number" min={1} className={inputCls()} value={form.warmupDailyLimit}
-                  onChange={(e) => setForm({ ...form, warmupDailyLimit: e.target.value })} placeholder="e.g. 20" />
-              </Field>
-            </fieldset>
-          )}
-
-          {showStep(4) && (
-            <fieldset className="space-y-4 mt-5">
-              <legend className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2 flex items-center gap-1.5"><CalendarClock size={12} /> Schedule & timezone</legend>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Timezone (IANA)">
-                  <select className={inputCls()} value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })}>
-                    {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-                  </select>
-                </Field>
-                <label className="flex items-end gap-2 text-sm text-slate-700 pb-2 cursor-pointer">
-                  <input type="checkbox" className="w-4 h-4 accent-[rgb(var(--primary))]"
-                    checked={form.scheduleEnabled}
-                    onChange={(e) => setForm({ ...form, scheduleEnabled: e.target.checked })} />
-                  Restrict sending to a weekly schedule
-                </label>
-              </div>
-              {form.scheduleEnabled && (
-                <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
-                  {Object.entries(DAY_NAMES).map(([day, label]) => {
-                    const w = form.sendingSchedule[day];
-                    const dayError = formErrors[`schedule-${day}`];
-                    return (
-                      <div key={day} className="flex flex-wrap items-center gap-3 px-3 py-2">
-                        <label className="flex items-center gap-2 w-36 text-sm font-medium text-slate-700 cursor-pointer">
-                          <input type="checkbox" className="w-4 h-4 accent-[rgb(var(--primary))]"
-                            checked={w.enabled} onChange={(e) => setDay(day, { enabled: e.target.checked })} />
-                          {label}
-                        </label>
-                        <input type="time" aria-label={`${label} start`} disabled={!w.enabled}
-                          className="border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:opacity-40"
-                          value={w.start} onChange={(e) => setDay(day, { start: e.target.value })} />
-                        <span className="text-slate-400 text-xs">to</span>
-                        <input type="time" aria-label={`${label} end`} disabled={!w.enabled}
-                          className="border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:opacity-40"
-                          value={w.end} onChange={(e) => setDay(day, { end: e.target.value })} />
-                        {!w.enabled && <span className="text-xs text-slate-400">Disabled</span>}
-                        {dayError && <span className="text-xs text-red-600 w-full" role="alert">{dayError}</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </fieldset>
-          )}
-
-          {showStep(5) && isCreate && (
-            createdId ? (
-              <div className="text-center py-6 space-y-3">
-                {createdTest?.success ? (
-                  <>
-                    <CheckCircle2 size={40} className="mx-auto text-emerald-500" />
-                    <h3 className="text-lg font-semibold text-slate-900">Connection successful</h3>
-                    <p className="text-sm text-slate-500">{createdAccount?.fromEmail} can send email through this SMTP account.</p>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={40} className="mx-auto text-red-500" />
-                    <h3 className="text-lg font-semibold text-slate-900">Connection failed</h3>
-                    <p className="text-sm text-slate-600" role="alert">{createdTest?.message || "SMTP connection failed."}</p>
-                    <p className="text-xs text-slate-400">The account was created and SMTP credentials were stored encrypted. Fix the SMTP settings and use “Test Connection”.</p>
-                  </>
-                )}
-                <button onClick={closeForm}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
-                  Done
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <h3 className="text-sm font-semibold text-slate-700">Review before creating</h3>
-                <dl className="grid grid-cols-2 gap-2 text-sm bg-slate-50 border border-slate-200 rounded-lg p-4">
-                  <dt className="text-slate-500">Account</dt><dd className="text-slate-800 font-medium">{form.name || "—"}</dd>
-                  <dt className="text-slate-500">From</dt><dd className="text-slate-800">{form.fromName} &lt;{form.fromEmail || "—"}&gt;</dd>
-                  <dt className="text-slate-500">SMTP</dt><dd className="text-slate-800">{form.smtpHost || "—"}:{form.smtpPort} · {form.security.toUpperCase()}</dd>
-                  <dt className="text-slate-500">Limits</dt><dd className="text-slate-800">{form.dailyLimit || "∞"}/day · {form.hourlyLimit || "∞"}/hour</dd>
-                  <dt className="text-slate-500">Timezone</dt><dd className="text-slate-800">{form.timezone}</dd>
-                  <dt className="text-slate-500">Schedule</dt><dd className="text-slate-800">{form.scheduleEnabled ? "Weekly schedule set" : "Always eligible (campaign window applies)"}</dd>
-                </dl>
-                <p className="text-xs text-slate-400">Creating the account stores its password encrypted (AES-256-GCM) and then runs a real SMTP handshake to verify it.</p>
-              </div>
-            )
-          )}
-
-          <div className="flex justify-between items-center gap-2 mt-6 border-t border-slate-100 pt-4">
-            <div>
-              {isCreate && wizardStep > 1 && !createdId && (
-                <button onClick={() => setWizardStep((s) => Math.max(1, s - 1))}
-                  className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50">
-                  <ChevronLeft size={15} /> Back
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              {!isCreate || !createdId ? (
-                <button onClick={closeForm}
-                  className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 bg-white hover:bg-slate-50">
-                  Cancel
-                </button>
-              ) : null}
-              {isCreate && wizardStep < 5 && (
-                <button onClick={() => { if (validateStep(wizardStep)) setWizardStep((s) => Math.min(5, s + 1)); }}
-                  className="inline-flex items-center gap-1 px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
-                  Next <ChevronRight size={15} />
-                </button>
-              )}
-              {(!isCreate || wizardStep === 5) && !createdId && (
-                <button onClick={save} disabled={isSaving}
-                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed">
-                  {isSaving && <Loader2 size={15} className="animate-spin" />}
-                  {isCreate ? "Create account & test connection" : "Save Changes"}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* Add / edit mailbox wizard (SalesBlink-style stepper) — mounted only
+          while open so step/form state resets on every open. */}
+      {wizardOpen && (
+        <AddAccountWizard
+          open
+          mode={wizardMode}
+          account={editingAccount}
+          signatures={signatures}
+          onClose={() => setWizardOpen(false)}
+          onSaved={() => void load()}
+        />
       )}
 
       {dialog}
 
       {/* Accounts table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        {/* Status tabs + search */}
+        {!isLoading && !loadError && accounts.length > 0 && (
+          <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="account-tabs">
+            <div className="flex items-center gap-1 overflow-x-auto" role="tablist" aria-label="Account status">
+              {ACCOUNT_TABS.map((t) => {
+                const selected = tab === t.value;
+                const count = tabCount(t.value);
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setTab(t.value)}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      selected
+                        ? "bg-primary-50 text-primary ring-1 ring-primary/25"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                    }`}
+                  >
+                    {t.label}
+                    <span className={`tabular-nums text-[10px] ${selected ? "text-primary/80" : "text-slate-400"}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="relative shrink-0 sm:w-56">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search mailboxes…"
+                aria-label="Search sending accounts"
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/60 py-1.5 pl-8 pr-3 text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="flex items-center justify-center py-14">
             <div className="w-8 h-8 animate-spin rounded-full border-[3px] border-primary border-t-transparent" aria-label="Loading" />
@@ -802,11 +411,23 @@ export function EmailSendingSettingsPage() {
             <Mail className="mx-auto text-slate-300 mb-3" size={36} aria-hidden />
             <h3 className="text-sm font-semibold text-slate-900">No sending accounts yet</h3>
             <p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">
-              Add your SMTP server to start sending campaigns. SalesFire works with any standards-compliant server such as Postfix.
+              Connect a mailbox — Google Workspace, Microsoft 365 or any SMTP server — to start sending campaigns.
             </p>
             <button onClick={openCreate}
               className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
               <Plus size={16} /> Add Sending Account
+            </button>
+          </div>
+        ) : filteredAccounts.length === 0 ? (
+          <div className="p-12 text-center" data-testid="accounts-empty-filter">
+            <Search className="mx-auto text-slate-300 mb-3" size={36} aria-hidden />
+            <h3 className="text-sm font-semibold text-slate-900">No mailboxes match these filters</h3>
+            <p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">
+              Try a different status tab or clear the search to see all {accounts.length} mailbox(es).
+            </p>
+            <button onClick={() => { setTab("all"); setSearch(""); }}
+              className="mt-4 text-sm font-medium text-primary hover:underline">
+              Clear filters
             </button>
           </div>
         ) : (
@@ -830,7 +451,7 @@ export function EmailSendingSettingsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {accounts.map((a) => {
+                {filteredAccounts.map((a) => {
                   const test = testResults[a.id];
                   const remainingToday = a.remainingToday ?? (a.dailyLimit != null ? Math.max(0, a.dailyLimit - (a.sentToday ?? 0)) : null);
                   const remainingHour = a.remainingThisHour ?? (a.hourlyLimit != null ? Math.max(0, a.hourlyLimit - (a.sentThisHour ?? 0)) : null);
@@ -1050,16 +671,6 @@ function timeAgo(iso: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
-}
-
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-slate-700 mb-1">{label}</label>
-      {children}
-      {error && <p className="mt-1 text-xs text-red-600" role="alert">{error}</p>}
-    </div>
-  );
 }
 
 function IconBtn({ title, onClick, danger, disabled, children }: {

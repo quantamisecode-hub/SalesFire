@@ -15,13 +15,19 @@ async function buildTransport(account) {
   const secure = account.security === 'ssl';
   const requireTls = account.security === 'tls' && !secure;
 
+  // Blank username means "use the from address" (documented in the add-mailbox
+  // wizard) — WITHOUT this fallback nodemailer sends no AUTH at all, and
+  // transport.verify() would "succeed" against any server without ever checking
+  // the password.
+  const user = account.smtpUsername || account.fromEmail;
+
   return nodemailer.createTransport({
     host: account.smtpHost,
     port: account.smtpPort,
     secure, // implicit TLS on connect (usually 465)
     requireTls, // STARTTLS required (usually 587)
-    auth: account.smtpUsername
-      ? { user: account.smtpUsername, pass: plain || undefined }
+    auth: user
+      ? { user, pass: plain || undefined }
       : undefined,
     connectionTimeout: 10000,
     greetingTimeout: 10000,

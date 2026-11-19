@@ -1,25 +1,31 @@
 // Unified Inbox — /campaigns/inbox[/:conversationId]
-// Three panes: conversation list | thread + composer | lead/conversation context.
-// Instantly-grade density and information layout; all data is live from the API.
+// Smartlead Master Inbox layout: mailbox folder rail | conversation list |
+// reading pane (email cards) | lead context. All data live from the API.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Inbox, PanelRight, Loader2, CheckCheck } from "lucide-react";
+import { ArrowLeft, Inbox, PanelRight, Loader2, CheckCheck, FolderOpen, X } from "lucide-react";
 import { inboxService, type InboxConversationListItem, type InboxConversationDetail, type InboxMember } from "@/services/inbox";
-import { ConversationList, type InboxFilter } from "@/components/inbox/ConversationList";
+import { ConversationList, type InboxSort } from "@/components/inbox/ConversationList";
+import { MailboxSidebar, type InboxFilter, INBOX_FOLDERS } from "@/components/inbox/MailboxSidebar";
 import { ThreadView } from "@/components/inbox/ThreadView";
 import { ReplyComposer } from "@/components/inbox/ReplyComposer";
 import { ContextPanel } from "@/components/inbox/ContextPanel";
 import { useToast } from "@/components/ui/Toast";
 
+const VALID_FILTERS: InboxFilter[] = INBOX_FOLDERS.map((f) => f.value);
+
 export function InboxPage() {
   const { conversationId } = useParams<{ conversationId?: string }>();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const toast = useToast();
 
-  const [filter, setFilter] = useState<InboxFilter>((searchParams.get("filter") as InboxFilter) || "all");
+  const urlFilter = searchParams.get("filter") as InboxFilter | null;
+  const [filter, setFilter] = useState<InboxFilter>(urlFilter && VALID_FILTERS.includes(urlFilter) ? urlFilter : "all");
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [sort, setSort] = useState<InboxSort>("last_message_at");
   const [page, setPage] = useState(1);
   const [conversations, setConversations] = useState<InboxConversationListItem[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
@@ -33,9 +39,14 @@ export function InboxPage() {
   const [members, setMembers] = useState<InboxMember[]>([]);
   const [mobilePane, setMobilePane] = useState<"list" | "thread">("list");
   const [contextOpen, setContextOpen] = useState(false);
+  const [foldersOpen, setFoldersOpen] = useState(false);
 
   const searchTimer = useRef<number | null>(null);
   const pollRef = useRef<number | null>(null);
+
+  const loadCounts = useCallback(() => {
+    inboxService.counts().then((r) => setCounts(r.data || null)).catch(() => { /* badges are non-critical */ });
+  }, []);
 
   const loadList = useCallback(async () => {
     setListLoading(true);
@@ -44,17 +55,19 @@ export function InboxPage() {
       const res = await inboxService.list({
         filter,
         search: search || undefined,
+        sort,
         page,
         pageSize: 25,
       });
       setConversations(res.data || []);
       setPagination(res.pagination || { page: 1, pages: 1, total: 0 });
+      loadCounts();
     } catch (err: any) {
       setListError(err?.data?.error || err?.message || "Unable to load conversations.");
     } finally {
       setListLoading(false);
     }
-  }, [filter, search, page]);
+  }, [filter, search, sort, page, loadCounts]);
 
   useEffect(() => { loadList(); }, [loadList]);
 
@@ -65,7 +78,7 @@ export function InboxPage() {
     return () => { if (searchTimer.current) window.clearTimeout(searchTimer.current); };
   }, [searchInput]);
 
-  // Poll for updates every 45s (skipped while tab hidden); back off on error
+  // Poll for updates every 45s (skipped while tab hidden); refocus refreshes
   useEffect(() => {
     const tick = () => { if (!document.hidden) loadList(); };
     pollRef.current = window.setInterval(tick, 45000);
@@ -87,7 +100,7 @@ export function InboxPage() {
     try {
       const res = await inboxService.get(id);
       setDetail(res.data);
-      // Auto-mark read when opened (Instantly-style); badge updates on next list fetch
+      // Auto-mark read when opened (mailbox convention); badge updates on next list fetch
       if (res.data.unread > 0) {
         inboxService.markRead(id).catch(() => {});
       }
@@ -103,6 +116,19 @@ export function InboxPage() {
     if (!conversationId) { setDetail(null); return; }
     loadDetail(conversationId);
   }, [conversationId, loadDetail]);
+
+  const changeFilter = (f: InboxFilter) => {
+    setFilter(f);
+    setPage(1);
+    setFoldersOpen(false);
+    // Keep the URL deep-linkable (?filter=…) without stacking history entries
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (f === "all") next.delete("filter");
+      else next.set("filter", f);
+      return next;
+    }, { replace: true });
+  };
 
   const selectConversation = (id: string) => {
     navigate(`/campaigns/inbox/${id}`, { replace: false });
@@ -128,6 +154,9 @@ export function InboxPage() {
   };
 
   const activeId = conversationId || null;
+  const activeFolderLabel = VALID_FILTERS.includes(filter)
+    ? INBOX_FOLDERS.find((f) => f.value === filter)?.label
+    : "Inbox";
 
   const conversationBody = (
     <>
@@ -175,11 +204,19 @@ export function InboxPage() {
           <h1 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
             <Inbox size={17} className="text-primary-600" aria-hidden /> Unified Inbox
           </h1>
+          <span className="hidden rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 sm:inline">
+            {activeFolderLabel}
+          </span>
           <span className="hidden text-[11px] tabular-nums text-slate-400 sm:inline">
             {pagination.total} thread{pagination.total === 1 ? "" : "s"}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          {/* Mobile folders drawer trigger */}
+          <button type="button" onClick={() => setFoldersOpen(true)} aria-label="Open mailboxes"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:hidden">
+            <FolderOpen size={16} />
+          </button>
           <button type="button" onClick={() => action("read-all", () => inboxService.markAllRead())}
             disabled={pendingAction === "read-all"}
             title="Mark all as read" aria-label="Mark all as read"
@@ -193,18 +230,23 @@ export function InboxPage() {
         </div>
       </header>
 
-      {/* Body: list | thread | context */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(300px,340px)_minmax(0,1fr)] xl:grid-cols-[minmax(300px,340px)_minmax(0,1fr)_minmax(280px,320px)]">
+      {/* Body: folder rail | list | thread | context */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[190px_minmax(300px,340px)_minmax(0,1fr)] xl:grid-cols-[190px_minmax(300px,340px)_minmax(0,1fr)_minmax(280px,320px)]">
+        {/* Folder rail — desktop */}
+        <div className="hidden min-h-0 lg:block">
+          <MailboxSidebar value={filter} onChange={changeFilter} counts={counts} />
+        </div>
+
         {/* List pane — hidden on mobile when viewing thread */}
         <div className={`${mobilePane === "list" ? "flex" : "hidden"} min-h-0 flex-col lg:flex`}>
           <ConversationList
             conversations={conversations}
             selectedId={activeId}
             onSelect={selectConversation}
-            filter={filter}
-            onFilterChange={(f) => { setFilter(f); setPage(1); }}
             search={searchInput}
             onSearchChange={setSearchInput}
+            sort={sort}
+            onSortChange={(s) => { setSort(s); setPage(1); }}
             page={pagination.page}
             pages={pagination.pages}
             total={pagination.total}
@@ -231,6 +273,24 @@ export function InboxPage() {
           )}
         </div>
       </div>
+
+      {/* Folders drawer — < lg */}
+      {foldersOpen && (
+        <div className="fixed inset-0 z-40 flex" role="dialog" aria-modal="true" aria-label="Mailboxes">
+          <button className="absolute inset-0 bg-slate-900/40" aria-label="Close mailboxes" onClick={() => setFoldersOpen(false)} />
+          <div className="absolute left-0 top-0 h-full w-[min(70vw,240px)] bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+              <span className="text-[13px] font-semibold text-slate-700">Mailboxes</span>
+              <button onClick={() => setFoldersOpen(false)} aria-label="Close" className="rounded-lg bg-slate-100 p-1.5 text-slate-500 hover:bg-slate-200">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="h-[calc(100%-2.5rem)]">
+              <MailboxSidebar value={filter} onChange={changeFilter} counts={counts} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Context drawer — < xl */}
       {contextOpen && detail && (

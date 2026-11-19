@@ -18,6 +18,13 @@ export interface SmtpAccount {
   security: "none" | "tls" | "ssl";
   smtpUsername?: string;
   hasPassword: boolean;
+  /** Reply sync (IMAP) — enables inbound fetch into the Unified Inbox. */
+  imapEnabled?: boolean;
+  imapHost?: string | null;
+  imapPort?: number | null;
+  imapSecure?: boolean;
+  imapUsername?: string | null;
+  hasImapPassword?: boolean;
   fromEmail: string;
   fromName?: string;
   replyToEmail?: string;
@@ -61,6 +68,13 @@ export interface SmtpAccountInput {
   security: "none" | "tls" | "ssl";
   smtpUsername?: string;
   smtpPassword?: string;
+  /** Reply sync (IMAP) — host/user/password required when imapEnabled. */
+  imapEnabled?: boolean;
+  imapHost?: string;
+  imapPort?: number;
+  imapSecure?: boolean;
+  imapUsername?: string;
+  imapPassword?: string;
   fromEmail: string;
   fromName?: string;
   replyToEmail?: string;
