@@ -8,7 +8,7 @@ const { sequelize } = require('../db');
 
 class SendingAccountUsage extends Model {
   static associate(models) {
-    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'smtpAccountId' });
+    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'smtpAccountId', onDelete: 'CASCADE' });
   }
 }
 

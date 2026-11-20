@@ -166,3 +166,81 @@ describe("EmailSendingSettingsPage — status tabs + search", () => {
     expect(within(dialog).getByRole("radio", { name: /google workspace/i })).toBeInTheDocument();
   });
 });
+
+describe("EmailSendingSettingsPage — filter chips + first-run empty state", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("shows a removable status chip when a non-default tab is active", async () => {
+    stubServices();
+    renderPage();
+    await screen.findByText("ready@acme.test");
+
+    expect(screen.queryByTestId("account-filter-chips")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Has error/ }));
+    const chips = await screen.findByTestId("account-filter-chips");
+    expect(chips).toHaveTextContent("Status: Has error");
+
+    fireEvent.click(within(chips).getByRole("button", { name: "Remove filter Status: Has error" }));
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /^All/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByTestId("account-filter-chips")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows a search chip and Clear all resets tab + search together", async () => {
+    stubServices();
+    renderPage();
+    await screen.findByText("ready@acme.test");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Paused/ }));
+    fireEvent.change(screen.getByLabelText("Search sending accounts"), { target: { value: "quantam" } });
+
+    const chips = await screen.findByTestId("account-filter-chips");
+    expect(chips).toHaveTextContent("Status: Paused");
+    expect(chips).toHaveTextContent("Search: quantam");
+
+    fireEvent.click(within(chips).getByRole("button", { name: "Clear all" }));
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /^All/ })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByLabelText("Search sending accounts")).toHaveValue("");
+      expect(screen.queryByTestId("account-filter-chips")).not.toBeInTheDocument();
+      expect(screen.getByText("ready@acme.test")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps chips visible above the no-match empty state", async () => {
+    stubServices();
+    renderPage();
+    await screen.findByText("ready@acme.test");
+
+    fireEvent.change(screen.getByLabelText("Search sending accounts"), { target: { value: "ghost@example.test" } });
+    expect(await screen.findByTestId("accounts-empty-filter")).toBeInTheDocument();
+    const chips = screen.getByTestId("account-filter-chips");
+    expect(chips).toHaveTextContent("Search: ghost@example.test");
+    // removing the chip alone restores the list
+    fireEvent.click(within(chips).getByRole("button", { name: "Remove filter Search: ghost@example.test" }));
+    await waitFor(() => expect(screen.getByText("ready@acme.test")).toBeInTheDocument());
+  });
+
+  it("first-run shows the connect-your-first-mailbox CTA which opens the wizard", async () => {
+    stubServices();
+    vi.mocked(emailSendingService.listAccounts).mockResolvedValue({ success: true, data: [] });
+    vi.mocked(emailSendingService.getOverview).mockResolvedValue({
+      success: true,
+      data: {
+        totalAccounts: 0, activeAccounts: 0, accountsWithErrors: 0,
+        emailsSentToday: 0, remainingCapacityToday: 0, bounces: 0, replies: 0, failedSends: 0,
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("accounts-empty-first")).toHaveTextContent(/Connect your first mailbox/i);
+    // tabs/search hidden with no accounts; no filter chips either
+    expect(screen.queryByTestId("account-tabs")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Connect mailbox/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Add sending account" });
+    expect(within(dialog).getByText("Add a mailbox")).toBeInTheDocument();
+  });
+});

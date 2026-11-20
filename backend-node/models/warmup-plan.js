@@ -6,7 +6,7 @@ const { sequelize } = require('../db');
 
 class WarmupPlan extends Model {
   static associate(models) {
-    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'accountId' });
+    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'accountId', onDelete: 'CASCADE' });
     this.belongsTo(models.Organization, { as: 'organization', foreignKey: 'organizationId' });
   }
 }

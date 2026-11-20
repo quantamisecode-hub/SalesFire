@@ -462,7 +462,18 @@ router.delete('/accounts/:id', requirePrivileged, async (req, res) => {
         error: `Account is assigned to ${poolUse + legacyUse} campaign(s). Remove it from their sending pools first.`,
       });
     }
-    await account.destroy();
+    // Several child FKs are ON DELETE NO ACTION (and SQLite never rebuilds
+    // constraints on existing databases), so deletion must propagate
+    // explicitly: drop sync state / usage / warm-up rows and detach message
+    // history (messages keep their thread; only the mailbox pointer clears).
+    const sequelize = models.SmtpAccount.sequelize;
+    await sequelize.transaction(async (t) => {
+      await models.MailboxSyncState.destroy({ where: { sendingAccountId: account.id }, transaction: t });
+      await models.SendingAccountUsage.destroy({ where: { smtpAccountId: account.id }, transaction: t });
+      await models.WarmupPlan.destroy({ where: { accountId: account.id }, transaction: t });
+      await models.EmailMessage.update({ sendingAccountId: null }, { where: { sendingAccountId: account.id }, transaction: t });
+      await account.destroy({ transaction: t });
+    });
     audit(req.user.org, req.user.id, 'sending_account.deleted', 'smtp_account', account.id, { fromEmail: account.fromEmail });
     res.json({ success: true, data: { id: account.id } });
     realtime.emitAccountsChanged(req.user.org, account.id, req.headers['x-client-id']);

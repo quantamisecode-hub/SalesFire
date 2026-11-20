@@ -17,7 +17,7 @@ class Conversation extends Model {
     this.belongsTo(models.Lead, { as: 'lead', foreignKey: 'leadId' });
     this.belongsTo(models.Campaign, { as: 'campaign', foreignKey: 'campaignId' });
     this.belongsTo(models.CampaignSequence, { as: 'sequence', foreignKey: 'sequenceId' });
-    this.belongsTo(models.SmtpAccount, { as: 'sendingAccount', foreignKey: 'sendingAccountId' });
+    this.belongsTo(models.SmtpAccount, { as: 'sendingAccount', foreignKey: 'sendingAccountId', onDelete: 'SET NULL' });
     this.belongsTo(models.User, { as: 'assignee', foreignKey: 'assignedUserId' });
     this.hasMany(models.ConversationInsight, { as: 'insights', foreignKey: 'conversationId' });
     this.hasMany(models.ConversationDraft, { as: 'drafts', foreignKey: 'conversationId' });
@@ -113,7 +113,7 @@ class EmailMessage extends Model {
     this.belongsTo(models.Conversation, { as: 'conversation', foreignKey: 'conversationId' });
     this.belongsTo(models.Lead, { as: 'lead', foreignKey: 'leadId' });
     this.belongsTo(models.Campaign, { as: 'campaign', foreignKey: 'campaignId' });
-    this.belongsTo(models.SmtpAccount, { as: 'sendingAccount', foreignKey: 'sendingAccountId' });
+    this.belongsTo(models.SmtpAccount, { as: 'sendingAccount', foreignKey: 'sendingAccountId', onDelete: 'SET NULL' });
   }
 }
 
@@ -199,7 +199,7 @@ EmailMessage.init({
 
 class MailboxSyncState extends Model {
   static associate(models) {
-    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'sendingAccountId' });
+    this.belongsTo(models.SmtpAccount, { as: 'account', foreignKey: 'sendingAccountId', onDelete: 'CASCADE' });
   }
 }
 

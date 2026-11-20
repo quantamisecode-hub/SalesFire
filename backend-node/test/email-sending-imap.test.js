@@ -242,3 +242,70 @@ describe('email-sending accounts — IMAP reply sync', () => {
     assert.strictEqual(transport.options.auth.user, row.fromEmail);
   });
 });
+
+// The smtp_account child FKs are ON DELETE NO ACTION in the shipped schema and
+// SQLite never rebuilds constraints on an existing database — so DELETE must
+// clean children explicitly or it 500s (regression: deleting a reply-synced
+// mailbox failed on its mailbox_sync_states row).
+describe('delete sending account — child-row propagation', () => {
+  test('DELETE removes sync state / usage / warm-up rows and detaches messages', async () => {
+    const created = await request(cookie, 'POST', '/email-sending/accounts', baseAccount({
+      imapEnabled: true, imapHost: 'imap.example.test',
+      imapUsername: 'sender@example.test', imapPassword: 'imap-secret-1',
+    }));
+    assert.strictEqual(created.status, 201, JSON.stringify(created.json));
+    const id = created.json.data.id;
+    const account = await models.SmtpAccount.findByPk(id);
+    const org = account.organizationId;
+
+    await models.MailboxSyncState.create({ organizationId: org, sendingAccountId: id, provider: 'imap' });
+    await models.SendingAccountUsage.create({ smtpAccountId: id, periodType: 'day', periodKey: '2026-11-20', used: 3 });
+    await models.WarmupPlan.create({ organizationId: org, accountId: id });
+    const conv = await models.Conversation.create({ organizationId: org, subject: '[del-test] thread' });
+    const msg = await models.EmailMessage.create({
+      organizationId: org, conversationId: conv.id, messageId: '<del-test@x.test>',
+      direction: 'outbound', sendingAccountId: id, subject: '[del-test]',
+    });
+
+    const { status, json } = await request(cookie, 'DELETE', `/email-sending/accounts/${id}`);
+    assert.strictEqual(status, 200, JSON.stringify(json));
+    assert.strictEqual(json.success, true);
+
+    // children with NO ACTION FKs are gone
+    assert.strictEqual(await models.SmtpAccount.count({ where: { id } }), 0, 'account row must be deleted');
+    assert.strictEqual(await models.MailboxSyncState.count({ where: { sendingAccountId: id } }), 0, 'sync state must be deleted');
+    assert.strictEqual(await models.SendingAccountUsage.count({ where: { smtpAccountId: id } }), 0, 'usage rows must be deleted');
+    assert.strictEqual(await models.WarmupPlan.count({ where: { accountId: id } }), 0, 'warm-up plan must be deleted');
+    // message history survives, only the mailbox pointer detaches
+    const survived = await models.EmailMessage.findByPk(msg.id);
+    assert.ok(survived, 'email message must survive account deletion');
+    assert.strictEqual(survived.sendingAccountId, null, 'message must be detached from the deleted account');
+    await survived.destroy();
+    await conv.destroy();
+  });
+
+  test('DELETE is refused (409) while a campaign pool still references the account', async () => {
+    const created = await request(cookie, 'POST', '/email-sending/accounts', baseAccount());
+    assert.strictEqual(created.status, 201);
+    const id = created.json.data.id;
+    const account = await models.SmtpAccount.findByPk(id);
+
+    const campaign = await models.Campaign.create({
+      organizationId: account.organizationId, name: `[del-test] Campaign ${ts}`, status: 'draft',
+      createdBy: account.createdBy,
+    });
+    await models.CampaignSendingAccount.create({
+      organizationId: account.organizationId, campaignId: campaign.id, smtpAccountId: id, enabled: true,
+    });
+
+    const { status, json } = await request(cookie, 'DELETE', `/email-sending/accounts/${id}`);
+    assert.strictEqual(status, 409, JSON.stringify(json));
+    assert.match(json.error, /sending pools/);
+
+    // cleanup: detach pool then delete for real
+    await models.CampaignSendingAccount.destroy({ where: { smtpAccountId: id } });
+    const retry = await request(cookie, 'DELETE', `/email-sending/accounts/${id}`);
+    assert.strictEqual(retry.status, 200, JSON.stringify(retry.json));
+    await campaign.destroy();
+  });
+});

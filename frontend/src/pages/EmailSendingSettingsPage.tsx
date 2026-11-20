@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Plus, Mail, Pencil, Trash2, PlugZap, Send, Power,
-  RefreshCw, CheckCircle2, XCircle, Loader2, CircleDot, Search,
+  RefreshCw, CheckCircle2, XCircle, Loader2, CircleDot, Search, X,
 } from "lucide-react";
 import { emailSendingService, type SendingOverview, type AccountUsage } from "@/services/emailSending";
 import { inboxService, type SyncAccountStatus } from "@/services/inbox";
@@ -303,8 +303,19 @@ export function EmailSendingSettingsPage() {
 
   const tabCount = (t: AccountTab) => accounts.filter((a) => tabMatches(a, t)).length;
 
+  // SalesBlink-style removable filter chips for whatever narrows the list.
+  const activeFilterChips: Array<{ key: string; label: string; clear: () => void }> = [];
+  if (tab !== "all") {
+    const label = ACCOUNT_TABS.find((t) => t.value === tab)?.label ?? tab;
+    activeFilterChips.push({ key: "tab", label: `Status: ${label}`, clear: () => setTab("all") });
+  }
+  if (search.trim()) {
+    activeFilterChips.push({ key: "search", label: `Search: ${search.trim()}`, clear: () => setSearch("") });
+  }
+  const clearAllFilters = () => { setTab("all"); setSearch(""); };
+
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-5" data-testid="email-sending-settings">
+    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-5" data-testid="email-sending-settings">
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Email Sending</h1>
@@ -357,7 +368,8 @@ export function EmailSendingSettingsPage() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Status tabs + search */}
         {!isLoading && !loadError && accounts.length > 0 && (
-          <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="account-tabs">
+          <div className="border-b border-slate-200 px-4 py-3" data-testid="account-tabs">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-1 overflow-x-auto" role="tablist" aria-label="Account status">
               {ACCOUNT_TABS.map((t) => {
                 const selected = tab === t.value;
@@ -394,6 +406,37 @@ export function EmailSendingSettingsPage() {
                 className="w-full rounded-lg border border-slate-200 bg-slate-50/60 py-1.5 pl-8 pr-3 text-sm text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
             </div>
+            </div>
+
+            {/* Removable chips for whatever narrows the list (SalesBlink-style) */}
+            {activeFilterChips.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3" data-testid="account-filter-chips">
+                <span className="text-xs font-medium text-slate-500">Filters:</span>
+                {activeFilterChips.map((c) => (
+                  <span
+                    key={c.key}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-1 pl-2.5 pr-1.5 text-xs text-slate-700"
+                  >
+                    {c.label}
+                    <button
+                      type="button"
+                      aria-label={`Remove filter ${c.label}`}
+                      onClick={c.clear}
+                      className="rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                    >
+                      <X size={12} aria-hidden />
+                    </button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -407,15 +450,15 @@ export function EmailSendingSettingsPage() {
             <button onClick={load} className="text-sm font-medium text-primary hover:underline">Try again</button>
           </div>
         ) : accounts.length === 0 ? (
-          <div className="p-12 text-center">
-            <Mail className="mx-auto text-slate-300 mb-3" size={36} aria-hidden />
-            <h3 className="text-sm font-semibold text-slate-900">No sending accounts yet</h3>
+          <div className="p-12 text-center" data-testid="accounts-empty-first">
+            <Mail className="mx-auto text-primary/30 mb-3" size={36} aria-hidden />
+            <h3 className="text-sm font-semibold text-slate-900">Connect your first mailbox</h3>
             <p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">
-              Connect a mailbox — Google Workspace, Microsoft 365 or any SMTP server — to start sending campaigns.
+              Add a mailbox to send campaigns from it, warm it up and sync replies into the Unified Inbox.
             </p>
             <button onClick={openCreate}
               className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
-              <Plus size={16} /> Add Sending Account
+              <Plus size={16} /> Connect mailbox
             </button>
           </div>
         ) : filteredAccounts.length === 0 ? (
@@ -432,7 +475,7 @@ export function EmailSendingSettingsPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[1080px] text-sm">
               <thead className="bg-slate-50 border-b border-slate-200">
                 <tr className="text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   <th className="px-4 py-3">Account</th>
@@ -532,7 +575,7 @@ export function EmailSendingSettingsPage() {
       {drawerId && (
         <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Account details">
           <div className="absolute inset-0 bg-slate-900/40" onClick={() => setDrawerId(null)} />
-          <aside className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl overflow-y-auto p-6 space-y-4">
+          <aside className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl overflow-y-auto p-4 sm:p-6 space-y-4">
             {(() => {
               const a = accounts.find((x) => x.id === drawerId);
               if (!a) return <p className="text-sm text-slate-500">Account not found.</p>;
